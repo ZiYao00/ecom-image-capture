@@ -1,0 +1,93 @@
+# Public repository: deny-by-default. Only the reviewed release source is tracked.
+# This workspace contains historical/product files that must remain local.
+/*
+
+# Public top-level files
+!/.gitignore
+!/README.md
+!/README.en.md
+!/LICENSE
+!/AGENTS.md
+!/ecom.cmd
+!/install.ps1
+!/CHANGELOG.md
+!/CONTRIBUTING.md
+!/SECURITY.md
+!/package.json
+!/package-lock.json
+!/requirements-ocr.txt
+
+# GitHub workflow and issue templates
+!/.github/
+/.github/*
+!/.github/workflows/
+/.github/workflows/*
+!/.github/workflows/ci.yml
+!/.github/ISSUE_TEMPLATE/
+/.github/ISSUE_TEMPLATE/*
+!/.github/ISSUE_TEMPLATE/bug_report.md
+
+# Public machine-independent config templates
+!/config/
+/config/*
+!/config/local.example.json
+!/config/README.md
+
+# Current documentation; historical handoffs remain local
+!/docs/
+/docs/*
+!/docs/PIPELINE-RULES.md
+!/docs/RECOVERY.md
+!/docs/INSTALL-WINDOWS.md
+!/docs/MCP-DEPENDENCIES.md
+!/docs/GITHUB-RELEASE.md
+
+# Runtime + safe recovery only. No historical migration/cleanup tools.
+!/scripts/
+/scripts/*
+!/scripts/browser.mjs
+!/scripts/browser-port.mjs
+!/scripts/ecom.mjs
+!/scripts/capture.mjs
+!/scripts/capture-policy.mjs
+!/scripts/capture-store.mjs
+!/scripts/captures.mjs
+!/scripts/check-environment.mjs
+!/scripts/chrome-connection.mjs
+!/scripts/diagnose-open.mjs
+!/scripts/eagle-readback.mjs
+!/scripts/eagle-reconcile.mjs
+!/scripts/html-preview.mjs
+!/scripts/lock-health-cli.mjs
+!/scripts/lock-health.mjs
+!/scripts/ocr.mjs
+!/scripts/ocr-worker.py
+!/scripts/setup-ocr.mjs
+!/scripts/package.mjs
+!/scripts/public-files.mjs
+!/scripts/audit-public.mjs
+!/scripts/probe-mcp.mjs
+!/scripts/receipt-sync.mjs
+!/scripts/reconcile-captures.mjs
+!/scripts/recover-direct.mjs
+!/scripts/recover-known.mjs
+!/scripts/recovery-core.mjs
+!/scripts/setup.mjs
+!/scripts/stitch-core.mjs
+!/scripts/stitch-detail.mjs
+
+# Unit tests; live/manual probes are local
+!/tests/
+/tests/*
+!/tests/*.test.mjs
+!/tests/capture-store-worker.mjs
+
+# Exclude all generated outputs regardless of directory.
+node_modules/
+runtime/
+profile/
+output/
+release/
+data/
+*.tmp
+*.part

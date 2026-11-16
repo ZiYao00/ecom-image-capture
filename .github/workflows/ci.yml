@@ -1,0 +1,63 @@
+name: Windows CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Windows / Node ${{ matrix.node }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "24"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: Install project-local Chrome DevTools MCP
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Unit tests (no Chrome or Eagle needed)
+        shell: bash
+        run: node --test tests/*.test.mjs
+      - name: URL/DOM parser self-test
+        run: node scripts/capture.mjs --self-test
+      - name: First-run setup dry-check
+        run: node scripts/setup.mjs --check
+      - name: Check syntax of public scripts
+        shell: bash
+        run: |
+          for script in scripts/*.mjs; do node --check "$script"; done
+      - name: Build publication ZIP
+        run: node scripts/package.mjs --tag "ci-${{ github.run_id }}-node${{ matrix.node }}"
+      - name: Verify ZIP exists
+        shell: bash
+        run: test -f release/ecom-image-capture-windows-portable-ci-${{ github.run_id }}-node${{ matrix.node }}.zip
+      - name: Fresh ZIP install and smoke test (no Eagle import)
+        shell: pwsh
+        run: |
+          $archive = 'release/ecom-image-capture-windows-portable-ci-${{ github.run_id }}-node${{ matrix.node }}.zip'
+          $target = 'release/verify-clean-install'
+          Expand-Archive -LiteralPath $archive -DestinationPath $target -ErrorAction Stop
+          Push-Location $target
+          try {
+            npm ci --ignore-scripts --no-audit --no-fund
+            if ($LASTEXITCODE -ne 0) { throw 'Fresh ZIP npm ci failed' }
+            node --test tests/*.test.mjs
+            if ($LASTEXITCODE -ne 0) { throw 'Fresh ZIP tests failed' }
+            node scripts/capture.mjs --self-test
+            if ($LASTEXITCODE -ne 0) { throw 'Fresh ZIP parser self-test failed' }
+            node scripts/audit-public.mjs
+            if ($LASTEXITCODE -ne 0) { throw 'Fresh ZIP public audit failed' }
+            node scripts/setup.mjs --check
+            if ($LASTEXITCODE -ne 0) { throw 'Fresh ZIP setup dry-check failed' }
+          } finally {
+            Pop-Location
+          }

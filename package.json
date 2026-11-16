@@ -1,0 +1,27 @@
+{
+  "name": "ecom-image-capture",
+  "version": "0.2.0-beta.8",
+  "private": true,
+  "description": "Windows Tmall main/detail image capture with Chrome DevTools MCP and Eagle MCP",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "dependencies": {
+    "chrome-devtools-mcp": "1.11.0"
+  },
+  "bin": {
+    "ecom": "./scripts/ecom.mjs"
+  },
+  "scripts": {
+    "setup": "node scripts/ecom.mjs setup",
+    "doctor": "node scripts/ecom.mjs doctor",
+    "browser": "node scripts/ecom.mjs browser status",
+    "capture": "node scripts/ecom.mjs capture",
+    "html": "node scripts/ecom.mjs html",
+    "ocr": "node scripts/ecom.mjs ocr",
+    "test": "node --test tests/*.test.mjs",
+    "package:windows": "node scripts/package.mjs",
+    "audit:public": "node scripts/audit-public.mjs"
+  }
+}
