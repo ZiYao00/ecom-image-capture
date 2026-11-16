@@ -61,7 +61,9 @@ test('same-product lock prevents duplicate task while different product lock rem
  const dir=prepare();
  try{
   const first=acquireProductLock(dir,'123456789012');
-  assert.throws(()=>acquireProductLock(dir,'123456789012'),/already being handled|lock is active/);
+  // Windows CI may classify a just-created NTFS lock as unknown due to timestamp precision.
+  // Both active and unknown must reject a duplicate task without touching the lock.
+  assert.throws(()=>acquireProductLock(dir,'123456789012'),/already being handled|lock is (?:active|unknown)/);
   const second=acquireProductLock(dir,'123456789013');
   second();first();
   const third=acquireProductLock(dir,'123456789012');third();
