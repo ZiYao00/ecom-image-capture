@@ -84,8 +84,9 @@ test('OS PID liveness check recognizes a real exited child process',()=>{
   assert.equal(archived.status,'archived');
   assert.ok(existsSync(archived.backup));
  }else{
-  // On restricted Windows hosts, unknown must never be treated as stale.
-  assert.throws(()=>archiveStaleLock(root,key,{minAgeMs:0}),/Refusing to archive/);
+  // Windows may change an exited child's PID state from unknown to dead between probes.
+  // Hold liveness unknown here to verify the refusal path deterministically.
+  assert.throws(()=>archiveStaleLock(root,key,{minAgeMs:0,checkPid:()=> 'unknown'}),/Refusing to archive/);
   assert.ok(existsSync(folder));
  }
 });
