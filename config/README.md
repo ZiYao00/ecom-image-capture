@@ -18,6 +18,8 @@
 - `chromeExecutablePath`：Chrome 未安装到常见目录时，可以手工指定电脑上已安装的 Chrome 程序路径。
 - `eagleMcpUrl`：**官方 Eagle MCP Server 插件**地址，不是 41595 Web API。
 - `outputRoot`：默认 `output/`，不会覆盖历史商品记录中的原始输出路径。
+- `storageMode`：公共默认 `copy`，保留本地主图/详情切片；设置为 `eagle` 则常规原图只归档 Eagle，不再复制整套源图到项目内。
+- `ffmpegExecutablePath`、`ffprobeExecutablePath`：按需为本机现有 FFmpeg 设置路径，供 `ecom stitch-eagle` 直接读取 Eagle 原图拼接，优先级低于 `STITCH_FFMPEG` / `STITCH_FFPROBE`。
 - `ocrPython`：可选，本项目 `runtime/ocr/.venv/Scripts/python.exe`；自行建立 OCR 环境时不需填写。
 
 **已有 PC1** 使用 `chromeMode=shared` 与 `chromeAgentSettings`，可以继续维持，不自动迁移。`chromeMode=autoConnect` 是 Chrome 144+ 的可选授权模式，不是公共版默认值。

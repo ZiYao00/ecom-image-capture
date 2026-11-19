@@ -72,7 +72,7 @@ node scripts/check-environment.mjs
 node scripts/capture.mjs "<用户粘贴的完整天猫商品URL>"
 ```
 
-默认生成 `output/商品ID/main`、`detail`、`detail/HTML.html`。已有回执不会直接重新提交 Eagle。
+默认 `storageMode=copy` 会生成 `output/商品ID/main`、`detail`、`detail/HTML.html`；如在本机 `config/local.json` 配置 `storageMode: "eagle"`，原图仅归档到 Eagle，项目保留索引/回执，不复制整套图片，也不生成依赖副本的 HTML。Eagle 插件可直接连续预览；需要长图时用 `ecom stitch-eagle <商品ID> [宽度]` 直接读取 Eagle 原图并仅把长图存回 Eagle。已有回执不自动重新提交 Eagle。
 
 ## 三、可选功能
 
@@ -89,7 +89,7 @@ OCR 使用本项目 `requirements-ocr.txt`，环境位于 `runtime/ocr/.venv`，
 
 ### 长图
 
-仅明确要求长图时需要 FFmpeg/FFprobe，普通采集不依赖它们。可以通过 `STITCH_FFMPEG` / `STITCH_FFPROBE` 指向用户已安装的可执行文件。
+仅明确要求长图时需要 FFmpeg/FFprobe，普通采集不依赖它们。可以通过 `STITCH_FFMPEG` / `STITCH_FFPROBE` 或本机 `config/local.json` 的 `ffmpegExecutablePath`、`ffprobeExecutablePath` 指向已安装的可执行文件。部分动画 WebP 需要 FFmpeg 9+；不要直接替换 Eagle 自带的 FFmpeg 插件二进制。
 
 ## 四、故障排查
 
@@ -105,6 +105,6 @@ OCR 使用本项目 `requirements-ocr.txt`，环境位于 `runtime/ocr/.venv`，
 
 发行 ZIP 必须只包含经过筛选的源码、文档、测试、`package.json`、`package-lock.json` 和 OCR requirements。不能包含 `node_modules`、浏览器 Profile、Eagle 数据、`config/local.json`、`data/captures.json`、运行日志、历史图片或临时文件。
 
-**最低独立验收**：在与开发电脑配置不同的 Windows 环境里成功 `npm ci`、启动专属 Chrome、启用 Eagle 官方 MCP、采集一个新商品，验证 Eagle ID/本地文件/离线 HTML 完整。尚未完成此验收前，状态只能称为候选公开版本。
+**最低独立验收**：在与开发电脑配置不同的 Windows 环境里成功 `npm ci`、启动专属 Chrome、启用 Eagle 官方 MCP、采集一个新商品，并按本机实际 `storageMode` 检查 Eagle itemId、实体文件及主图/详情分类；`copy` 模式还应验证本地副本/离线 HTML，`eagle` 模式应验证手机预览插件与 Eagle 原图直读长图拼接。未完成跨机真实端到端验收和 GitHub CI 检查前只能称候选版，不能声称正式稳定版。
 
 详细依赖与安全边界见 [MCP-DEPENDENCIES.md](MCP-DEPENDENCIES.md)。

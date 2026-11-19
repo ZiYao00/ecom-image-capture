@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {readFileSync,mkdirSync,mkdtempSync,copyFileSync,rmSync} from 'node:fs';
 import {join,resolve,dirname} from 'node:path';
+import {tmpdir} from 'node:os';
+import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {Script} from 'node:vm';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
@@ -24,20 +26,35 @@ test('manifest is valid for a resizable standalone Eagle window',()=>{
   assert.ok(m.main.width>=900&&m.main.height>=650);
   assert.ok(m.id&&m.name);
 });
-test('self-contained eagleplugin archive contains exactly manifest, PNG and index',()=>{
-  const bytes=readFileSync(join(root,'release','Eagle-Detail-Preview-0.1.1.eagleplugin'));
-  let off=0;const names=[];
-  while(bytes.readUInt32LE(off)===0x04034b50){
-    const method=bytes.readUInt16LE(off+8),sz=bytes.readUInt32LE(off+18),
-      nameSize=bytes.readUInt16LE(off+26),extra=bytes.readUInt16LE(off+28);
-    assert.equal(method,0);
-    const name=bytes.toString('utf8',off+30,off+30+nameSize);
-    const dataOffset=off+30+nameSize+extra;
-    assert.equal(bytes.subarray(dataOffset,dataOffset+sz).compare(readFileSync(join(root,'eagle-plugin',name))),0);
-    names.push(name);off=dataOffset+sz;
+test('Eagle plugin builds and validates from a clean source tree, without preexisting release/',()=>{
+  const isolated=mkdtempSync(join(tmpdir(),'ecom-plugin-'));
+  try{
+    mkdirSync(join(isolated,'scripts'),{recursive:true});
+    mkdirSync(join(isolated,'eagle-plugin'),{recursive:true});
+    copyFileSync(join(root,'scripts','build-eagle-plugin.mjs'),join(isolated,'scripts','build-eagle-plugin.mjs'));
+    copyFileSync(join(root,'html3.html'),join(isolated,'html3.html'));
+    copyFileSync(join(root,'eagle-plugin','manifest.json'),join(isolated,'eagle-plugin','manifest.json'));
+    const build=spawnSync(process.execPath,[join(isolated,'scripts','build-eagle-plugin.mjs')],
+      {encoding:'utf8',timeout:20000,windowsHide:true});
+    assert.equal(build.status,0,String(build.stderr||build.error?.message||''));
+    const version=JSON.parse(readFileSync(join(root,'eagle-plugin','manifest.json'),'utf8')).version;
+    const bytes=readFileSync(join(isolated,'release','Eagle-Detail-Preview-'+version+'.eagleplugin'));
+    let off=0;const names=[];
+    while(off+30<=bytes.length&&bytes.readUInt32LE(off)===0x04034b50){
+      const method=bytes.readUInt16LE(off+8),sz=bytes.readUInt32LE(off+18),
+        nameSize=bytes.readUInt16LE(off+26),extra=bytes.readUInt16LE(off+28);
+      assert.equal(method,0);
+      const name=bytes.toString('utf8',off+30,off+30+nameSize);
+      const dataOffset=off+30+nameSize+extra;
+      assert.equal(bytes.subarray(dataOffset,dataOffset+sz).compare(readFileSync(join(isolated,'eagle-plugin',name))),0);
+      names.push(name);off=dataOffset+sz;
+    }
+    assert.deepEqual(names,['manifest.json','logo.png','index.html']);
+    assert.equal(bytes.readUInt32LE(off),0x02014b50);
+    const png=readFileSync(join(isolated,'eagle-plugin','logo.png'));
+    assert.equal(png.readUInt32BE(20),128);
+    assert.equal(png.readUInt32BE(24),128);
+  }finally{
+    rmSync(isolated,{recursive:true,force:true});
   }
-  assert.deepEqual(names,['manifest.json','logo.png','index.html']);
-  const png=readFileSync(join(root,'eagle-plugin','logo.png'));
-  assert.equal(png.readUInt32BE(20),128);
-  assert.equal(png.readUInt32BE(24),128);
 });
