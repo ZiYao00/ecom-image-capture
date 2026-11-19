@@ -154,7 +154,7 @@ function capture(incoming,{scanOnly=false,resume=false}={}){
  }
  const childArgs=resume?['--resume-existing',target,...(dest?[dest]:[])]:
    scanOnly?['--dry-run',target]:[target,...(dest?[dest]:[])];
- const result=node('capture.mjs',childArgs,300000);
+ const result=node('capture.mjs',childArgs,420000);
  emit({status:result.ok?'completed':'failed_no_automatic_retry',
    operation:resume?'resume':scanOnly?'scan':'capture',exitCode:result.code,
    result:result.output||result.stdout, ...(result.ok?{}:{error:result.error,nextActions:[noRestart]})},
@@ -175,6 +175,21 @@ switch(command){
  case 'capture':capture(args);break;
  case 'scan':capture(args,{scanOnly:true});break;
  case 'resume':capture(args,{resume:true});break;
+ case 'export':if(args.length!==1||!/^[0-9]{8,16}$/.test(args[0]))emit({status:'invalid_arguments',usage:'ecom export <productId>'},2);
+  else simple('capture.mjs',['--copy-only',args[0]],{operation:'export',timeout:180000});break;
+ case 'stitch-eagle':if(!args.length||!/^[0-9]{8,16}$/.test(args[0])||args.length>5)
+    emit({status:'invalid_arguments',usage:'ecom stitch-eagle <productId> [width] [--date YYYY-MM-DD] [--check]'},2);
+   else simple('stitch-eagle.mjs',args,{operation:'stitch-eagle',timeout:480000});break;
+ case 'archive':if(!args.length||!/^[0-9]{8,16}$/.test(args[0])||args.length>3)emit({status:'invalid_arguments',usage:'ecom archive <productId> [YYYY-MM-DD] [--check]'},2);
+  else simple('archive-product.mjs',args,{operation:'archive',timeout:180000});break;
+ case 'stitch':{
+   const id=args[0],width=args[1];
+   if(!/^[0-9]{8,16}$/.test(id||'')||args.length>2||
+      (width!==undefined&&(!/^[0-9]{2,4}$/.test(width)||Number(width)<32||Number(width)>8192)))
+    emit({status:'invalid_arguments',usage:'ecom stitch <productId> [width=source_mode]'},2);
+   else simple('stitch-detail.mjs',['--product',id,...(width?['--width',width]:[])],{operation:'stitch',timeout:360000});
+   break;
+ }
  case 'html':if(args.length!==1)emit({status:'invalid_arguments',usage:'ecom html <productId>'},2);
   else simple('html-preview.mjs',['--product',args[0]],{operation:'html'});break;
  case 'ocr':if(args.length!==1)emit({status:'invalid_arguments',usage:'ecom ocr <productId>'},2);
@@ -192,7 +207,10 @@ switch(command){
   'ecom capture "<full Tmall URL>" [outputRoot]',
   'ecom scan "<full Tmall URL>" - read-only browser scan; no Eagle item_add',
   'ecom resume <productId> [outputRoot] - explicit safe resume only',
-  'ecom list | html <productId> | ocr <productId> | ocr-install',
+  'ecom archive <productId> [YYYY-MM-DD] [--check] - reconcile current Eagle files, preserves original receipt',
+  'ecom stitch-eagle <productId> [width] [--date YYYY-MM-DD] [--check] - read Eagle originals, stitch, import JPEGs only',
+  'ecom export <productId> - copy already verified Eagle images for OCR/stitch/export, without re-import',
+  'ecom list | html <productId> | ocr <productId> | ocr-install | stitch <productId> [width]',
   'ecom browser start|status'
  ],exitCodes:{0:'completed or ready',2:'invalid/failed, no automatic re-import',10:'needs action (e.g. Eagle plugin/login)'}},command==='help'?0:2);
 }

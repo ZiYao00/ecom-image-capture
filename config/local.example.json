@@ -2,5 +2,6 @@
   "chromeMode": "project",
   "chromeDebugPort": 9222,
   "eagleMcpUrl": "http://127.0.0.1:41596/mcp",
-  "outputRoot": "output"
+  "outputRoot": "output",
+  "storageMode": "copy"
 }

@@ -55,10 +55,10 @@ const executableVersion=(name,override)=>{
   const r=run(override||name,['-version']);
   return r.ok?{status:'passed',version:r.stdout.split(/\r?\n/)[0]}:failed(r.reason);
 };
-const ffmpeg=executableVersion('ffmpeg',process.env.STITCH_FFMPEG);
-const ffprobe=executableVersion('ffprobe',process.env.STITCH_FFPROBE);
+const ffmpeg=executableVersion('ffmpeg',process.env.STITCH_FFMPEG||config.ffmpegExecutablePath);
+const ffprobe=executableVersion('ffprobe',process.env.STITCH_FFPROBE||config.ffprobeExecutablePath);
 
-const python=process.env.SHARED_PYTHON||
+const python=process.env.SHARED_PYTHON||config.sharedPython||
   resolve(root,'..','.tools-venv','Scripts','python.exe');
 let sharedPython;
 if(!existsSync(python)){

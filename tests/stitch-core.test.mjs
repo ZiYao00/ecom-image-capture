@@ -1,18 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {existsSync,mkdirSync,statSync,writeFileSync} from 'node:fs';
+import {existsSync,mkdirSync,statSync,writeFileSync,readFileSync} from 'node:fs';
 import {join,resolve} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {modeWidth,resizedHeight,partitionImages,naturalImageFiles,stitchImages,probe} from '../scripts/stitch-core.mjs';
 
 const dir=resolve('data/stitch-tests/synthetic-fixtures');
 const output=resolve('data/stitch-tests/synthetic-results');
-const ffmpegAvailable=['ffmpeg','ffprobe'].every(exe=>{
+const localCfg=resolve('config/local.json');
+const cfg=existsSync(localCfg)?JSON.parse(readFileSync(localCfg,'utf8')):{};
+const exePaths={
+ ffmpeg:process.env.STITCH_FFMPEG||cfg.ffmpegExecutablePath||'ffmpeg',
+ ffprobe:process.env.STITCH_FFPROBE||cfg.ffprobeExecutablePath||'ffprobe'
+};
+process.env.STITCH_FFMPEG=exePaths.ffmpeg;
+process.env.STITCH_FFPROBE=exePaths.ffprobe;
+const ffmpegAvailable=Object.entries(exePaths).every(([name,exe])=>{
  const r=spawnSync(exe,['-version'],{encoding:'utf8',windowsHide:true,timeout:8000});
  return !r.error&&r.status===0;
 });
 function ffmpeg(args){
- const r=spawnSync('ffmpeg',['-hide_banner','-loglevel','error','-nostdin',...args],
+ const r=spawnSync(exePaths.ffmpeg,['-hide_banner','-loglevel','error','-nostdin',...args],
    {encoding:'utf8',timeout:45000,windowsHide:true});
  if(r.error||r.status!==0)throw Error('ffmpeg fixture failed: '+(r.stderr||r.error?.message||r.status));
 }
@@ -28,7 +36,7 @@ function fixtures(){
  return {png,jpg,gif};
 }
 function rgbAt(file,x,y){
- const out=spawnSync('ffmpeg',['-hide_banner','-loglevel','error','-nostdin',
+ const out=spawnSync(exePaths.ffmpeg,['-hide_banner','-loglevel','error','-nostdin',
   '-i',file,'-vf','crop=1:1:'+x+':'+y+',format=rgb24',
   '-frames:v','1','-f','rawvideo','pipe:1'],
   {timeout:18000,windowsHide:true,maxBuffer:40000});

@@ -91,3 +91,20 @@ release/
 data/
 *.tmp
 *.part
+
+# Eagle archive closeout + interactive window plugin (only reviewed project files)
+!/html3.html
+!/eagle-plugin/
+/eagle-plugin/*
+!/eagle-plugin/manifest.json
+!/eagle-plugin/index.html
+!/eagle-plugin/logo.png
+!/docs/EAGLE-ARCHIVE-PLUGIN.md
+!/docs/SHARED-RUNTIME.md
+!/scripts/archive-product.mjs
+!/scripts/eagle-archive.mjs
+!/scripts/storage-mode.mjs
+!/scripts/build-eagle-plugin.mjs
+!/scripts/eagle-current.mjs
+!/scripts/stitch-eagle-core.mjs
+!/scripts/stitch-eagle.mjs

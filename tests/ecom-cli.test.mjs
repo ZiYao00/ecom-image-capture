@@ -28,6 +28,13 @@ test('invalid capture URLs stop before browser/Eagle execution',()=>{
   assert.equal(r.output.status,'invalid_url');
  }
 });
+test('Eagle-only stitching and archive commands reject unsafe IDs before any API call',()=>{
+  for(const args of [['stitch-eagle','bad'],['stitch-eagle','../bad'],['archive','bad']]){
+    const r=call(args);
+    assert.equal(r.status,2);
+    assert.equal(r.output.status,'invalid_arguments');
+  }
+});
 test('resume never takes an invalid product id',()=>{
  const r=call(['resume','not-an-id']);
  assert.equal(r.status,2);

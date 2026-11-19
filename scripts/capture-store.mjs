@@ -48,6 +48,8 @@ export function captureSummary(receipt,options={}){
     eagleStatus:receipt.eagle||null,htmlStatus:receipt.postprocess?.html?.status||null,
     directFallbackCount:Array.isArray(receipt.directFallback)?receipt.directFallback.length:0,
     localStatus:receipt.localStatus||null,
+    storageMode:receipt.storageMode||'copy',archiveStatus:receipt.archive?.status||null,
+    workflowStatus:receipt.phase==='success'&&receipt.archive?.status==='complete'?'complete':'incomplete',
     durationMs:Number.isFinite(receipt.totalMs)?receipt.totalMs:null,outputDir:outputDir?resolve(outputDir):null};
 }
 export async function withShortLock(root,doWork,{timeoutMs=12000,recoveryOptions={}}={}){

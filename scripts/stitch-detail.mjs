@@ -7,6 +7,15 @@ import {fileURLToPath} from 'node:url';
 import {readRegistry,acquireProductLock} from './capture-store.mjs';
 import {stitchImages,naturalImageFiles,IMAGE_EXTENSIONS} from './stitch-core.mjs';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
+// Optional machine-local shared FFmpeg paths; explicit environment overrides take priority.
+const localConfigPath=join(root,'config','local.json');
+if(existsSync(localConfigPath)){
+ const local=JSON.parse(readFileSync(localConfigPath,'utf8'));
+ if(!process.env.STITCH_FFMPEG&&typeof local.ffmpegExecutablePath==='string')
+  process.env.STITCH_FFMPEG=local.ffmpegExecutablePath;
+ if(!process.env.STITCH_FFPROBE&&typeof local.ffprobeExecutablePath==='string')
+  process.env.STITCH_FFPROBE=local.ffprobeExecutablePath;
+}
 function usage(){
   console.log('node scripts/stitch-detail.mjs --product <商品ID> [--output-dir "<新目录>"] [--width 790] [--max-height 65500]');
   console.log('node scripts/stitch-detail.mjs --dir "<商品目录或详情图目录>" [--files "01.jpg,02.png"] [--output-dir "<新目录>"]');

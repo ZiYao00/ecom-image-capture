@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>详情页切片｜手机连续预览</title>
+<style>
+:root{font-family:"Microsoft YaHei","Noto Sans CJK SC",system-ui,-apple-system,sans-serif;color:#253044;background:#e9edf3}
+*{box-sizing:border-box}
+html{scroll-behavior:auto}
+body{margin:0;min-width:280px;min-height:100vh;background:radial-gradient(ellipse 75% 540px at 50% 0%,#f8f9fb 0%,#eef1f5 53%,#e9edf3 100%)}
+button,input{font:inherit}
+.app{min-height:100vh;padding-top:28px}
+.intro{width:min(980px,calc(100% - 40px));margin:0 auto 16px}
+.intro .eyebrow{margin:0 0 5px;color:#738093;font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}
+.intro h1{margin:0;font-size:19px;line-height:1.55;font-weight:700;overflow-wrap:anywhere}
+.intro p{margin:5px 0 0;color:#737e90;font-size:12px;line-height:1.6}
+.toolbar{position:sticky;top:12px;z-index:30;width:min(980px,calc(100% - 40px));margin:0 auto;padding:14px 18px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px 22px;border:1px solid rgba(205,213,225,.85);border-radius:16px;background:rgba(255,255,255,.95);box-shadow:0 8px 28px rgba(34,44,62,.08);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+.toolbar-info{display:flex;align-items:center;gap:10px;min-width:190px}
+.toolbar-icon{display:grid;place-items:center;width:36px;height:36px;border-radius:10px;background:#f1f3f7;color:#3c4658;flex:none}
+.toolbar-info strong{display:block;font-size:13px;line-height:1.5}
+.toolbar-info small{display:block;color:#788294;font-size:11px;line-height:1.5}
+.zoom-controls{display:flex;align-items:center;gap:12px;min-width:0}
+.zoom-controls label{font-size:12px;font-weight:600;white-space:nowrap}
+.zoom-controls input[type=range]{width:clamp(125px,24vw,240px);height:22px;margin:0;cursor:pointer;accent-color:#343f52}
+.zoom-controls output{min-width:50px;font-size:14px;text-align:right;font-variant-numeric:tabular-nums;font-weight:700}
+.zoom-controls button{border:1px solid #d7dce5;background:#fff;color:#394457;border-radius:9px;padding:7px 12px;min-height:34px;cursor:pointer;font-size:12px;transition:background-color .16s ease,border-color .16s ease}
+.zoom-controls button:hover{background:#f2f5f9;border-color:#b9c2ce}
+.zoom-controls button:active{background:#e6eaf0}
+.zoom-controls button:focus-visible,input[type=range]:focus-visible{outline:3px solid #5c86dc;outline-offset:3px}
+.stage{padding:32px 24px 0;overflow-x:auto;text-align:center}
+.phone{--screen-width:390px;box-sizing:content-box;position:relative;display:inline-block;width:var(--screen-width);padding:8px 8px 0;border:1px solid #979ca5;border-bottom:0;border-radius:48px 48px 0 0;text-align:left;vertical-align:top;background:linear-gradient(90deg,#41454d 0%,#b8bdc6 4%,#f0f2f4 18%,#b8bdc4 38%,#666c76 78%,#262b32 100%);box-shadow:0 18px 52px rgba(30,40,58,.18),0 1px 3px rgba(18,22,30,.11),-2px 0 0 rgba(255,255,255,.68) inset,2px 0 0 rgba(10,15,22,.3) inset}
+.phone::before,.phone::after{content:"";position:absolute;pointer-events:none;background:linear-gradient(90deg,#545963,#bfc4cd,#5a5f68);border-radius:3px;box-shadow:0 0 0 1px rgba(55,60,66,.25)}
+.phone::before{left:-5px;top:126px;width:4px;height:67px;box-shadow:0 79px 0 -0.5px #747a83,0 0 0 1px rgba(55,60,66,.25)}
+.phone::after{right:-5px;top:156px;width:4px;height:63px}
+.screen{overflow:hidden;border-radius:40px 40px 0 0;box-shadow:0 0 0 1px rgba(7,10,15,.91);background:#fff}
+.statusbar{height:55px;position:relative;display:flex;align-items:flex-start;justify-content:space-between;padding:17px 25px 0;color:#fff;background:#101216;font-size:12px;font-weight:700;font-family:system-ui,-apple-system,sans-serif;font-variant-numeric:tabular-nums}
+.island{position:absolute;top:10px;left:50%;transform:translateX(-50%);width:101px;height:27px;border-radius:22px;background:#000;box-shadow:inset 0 0 0 1px #23252b}
+.island::after{content:"";position:absolute;right:11px;top:10px;width:7px;height:7px;border-radius:100%;background:radial-gradient(circle at 35% 35%,#30465c,#0e151c 65%)}
+.status-icons{display:flex;align-items:center;gap:5px;height:14px}
+.status-icons svg{display:block;fill:currentColor}
+.images{background:#fff}
+.images figure{margin:0;padding:0;line-height:0}
+.images img{display:block;width:100%;height:auto;border:0}
+.end{margin:0 auto;padding:22px 20px 42px;color:#8994a3;text-align:center;font-size:12px;line-height:1.65}
+@media(max-width:640px){.app{padding-top:18px}.intro,.toolbar{width:calc(100% - 24px)}.intro h1{font-size:16px}.toolbar{top:8px;padding:12px}.toolbar-info{min-width:0}.toolbar-info small{font-size:10px}.zoom-controls{width:100%;gap:10px}.zoom-controls input[type=range]{flex:1;width:auto;min-width:80px}.stage{padding:23px 12px 0;text-align:left}.phone{margin-left:0}.end{padding-bottom:30px}}
+@media(prefers-reduced-motion:reduce){.zoom-controls button{transition:none}}
+@media print{html,body{background:#fff!important}.app{padding:0}.intro,.toolbar,.end{display:none!important}.stage{padding:0;overflow:visible;text-align:left}.phone{width:100%!important;padding:0;border:0;border-radius:0;background:none;box-shadow:none}.phone::before,.phone::after,.statusbar{display:none}.screen{border-radius:0;box-shadow:none}.images figure{break-inside:avoid}}
+
+/* Folder loading: keep all assets self-contained in this document. */
+.toolbar-actions{display:flex;align-items:center;justify-content:flex-end;gap:18px;flex-wrap:wrap}
+.pick-folder{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:38px;padding:8px 13px;border:1px solid #293346;border-radius:10px;background:#303b50;color:#fff;font-size:12px;font-weight:700;line-height:1.2;white-space:nowrap;cursor:pointer;transition:background-color .16s ease,box-shadow .16s ease}
+.pick-folder svg{width:17px;height:17px;flex:none}
+.pick-folder:hover{background:#202c3e;box-shadow:0 3px 10px #29334624}
+.pick-folder:active{background:#121c2b}
+.pick-folder:focus-visible,.empty-action:focus-visible{outline:3px solid #5c86dc;outline-offset:3px}
+.file-input{display:none}
+.eagle-load[hidden]{display:none!important}
+.eagle-load{background:#226d62;border-color:#1b6258}.eagle-load:hover{background:#145348}
+.empty-state{min-height:365px;padding:38px 25px 52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;background:linear-gradient(160deg,#fafbfc,#fff 55%,#f7f9fc)}
+.empty-state[hidden],.images[hidden]{display:none!important}
+.empty-icon{width:58px;height:58px;display:grid;place-items:center;border-radius:18px;background:#eef1f6;color:#526079}
+.empty-state h2{margin:4px 0 0;font-size:17px;line-height:1.5;color:#344057}
+.empty-state p{margin:0;max-width:265px;font-size:12px;line-height:1.85;color:#7b8799}
+.empty-action{margin-top:8px;padding:10px 18px;min-height:39px;border:0;border-radius:10px;background:#303b50;color:white;font-size:12px;font-weight:700;cursor:pointer}
+.empty-action:hover{background:#202c3e}
+.drop-overlay{pointer-events:none;position:fixed;z-index:90;inset:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;border:3px dashed #637b9e;border-radius:24px;background:rgba(242,247,254,.94);color:#30435e;opacity:0;visibility:hidden;transition:opacity .12s ease,visibility .12s ease}
+.drop-overlay strong{font-size:24px}.drop-overlay span{font-size:13px}
+body.is-dragging .drop-overlay{opacity:1;visibility:visible}
+.broken-image{display:block;padding:28px 12px;background:#f8f3f3;color:#ad5555;text-align:center;font-size:13px;line-height:1.7;white-space:normal;overflow-wrap:anywhere}
+@media(max-width:640px){.toolbar-actions{width:100%;justify-content:space-between;gap:12px}.pick-folder{min-height:38px}.zoom-controls{width:auto;flex:1}.zoom-controls label{display:none}.zoom-controls input[type=range]{min-width:65px}.zoom-controls output{min-width:44px}.zoom-controls button{padding:6px 9px}}
+@media(max-width:360px){.toolbar-actions{gap:9px}.pick-folder{padding:8px 10px}.zoom-controls{gap:7px}}
+@media(prefers-reduced-motion:reduce){.pick-folder,.drop-overlay{transition:none}}
+@media print{.empty-state,.drop-overlay{display:none!important}}
+
+/* V3: two-column desktop viewing; no sticky header across the artwork. */
+.app{padding:0}
+.workspace{width:min(1380px,100%);margin:0 auto;padding:32px 30px 76px;display:grid;grid-template-columns:270px minmax(0,1fr);column-gap:clamp(18px,3.2vw,48px);align-items:start}
+.sidebar{min-width:0;position:sticky;top:22px;align-self:start}
+.intro{width:100%;margin:0;padding:0 4px 19px}
+.intro h1{font-size:18px;line-height:1.45}
+.intro p{line-height:1.7}
+.toolbar{position:static;top:auto;z-index:auto;width:100%;margin:0;padding:18px;display:flex;flex-direction:column;align-items:stretch;flex-wrap:nowrap;gap:21px;border-radius:17px;background:#fff;backdrop-filter:none;-webkit-backdrop-filter:none;box-shadow:0 9px 27px rgba(34,44,62,.07)}
+.toolbar-info{width:100%;min-width:0;gap:10px}
+.toolbar-actions{width:100%;display:flex;flex-direction:column;align-items:stretch;gap:20px}
+.pick-folder{width:100%;min-height:42px;border-radius:10px;font-size:13px}
+.zoom-controls{display:grid;width:100%;grid-template-columns:1fr auto;gap:10px 8px;align-items:center}
+.zoom-controls label{display:block;grid-area:1/1;font-size:12px}
+.zoom-controls output{grid-area:1/2;min-width:0;font-size:14px;text-align:right}
+.zoom-controls input[type=range]{grid-area:2/1/3/3;width:100%;min-width:0;max-width:none;height:22px}
+.zoom-controls button{grid-area:3/1/4/3;justify-self:stretch;min-height:34px;padding:7px 12px}
+.sidebar-status{margin-top:14px;padding:12px 13px;border:1px solid #dce2e9;border-radius:11px;background:rgba(255,255,255,.63)}
+.sidebar-status .end{margin:0;padding:0;color:#68778b;text-align:left;font-size:11px;line-height:1.7;overflow-wrap:anywhere}
+.preview-column{min-width:0}
+.stage{padding:9px 20px 24px;overflow-x:auto;text-align:center}
+.phone{padding:8px;border:1px solid #979ca5;border-radius:48px;text-align:left}
+.screen{border-radius:40px;overflow:hidden}
+.bottom-chin{height:32px;background:#101216;display:flex;align-items:center;justify-content:center}
+.bottom-chin::after{content:"";display:block;width:105px;height:4px;border-radius:6px;background:#d4d8df;box-shadow:0 1px 3px #0005}
+@media (max-width:900px){
+  .workspace{display:block;padding:20px 18px 54px}
+  .sidebar{position:static;top:auto}
+  .intro{padding:0 3px 14px}
+  .toolbar{padding:15px;gap:13px}
+  .toolbar-actions{display:grid;grid-template-columns:minmax(125px,1fr) minmax(170px,1.35fr);gap:16px;align-items:center}
+  .zoom-controls{grid-template-columns:1fr auto;gap:6px 8px}
+  .zoom-controls button{grid-area:3/1/4/3}
+  .stage{padding:28px 0 24px;text-align:center}
+  .sidebar-status{margin-top:9px}
+}
+@media (max-width:530px){
+  .workspace{padding:14px 12px 36px}
+  .intro h1{font-size:17px}
+  .toolbar{padding:12px}
+  .toolbar-actions{display:flex;flex-direction:column;align-items:stretch;gap:13px}
+  .zoom-controls{width:100%}
+  .zoom-controls label{display:block}
+  .zoom-controls button{min-height:34px}
+  .stage{padding:24px 0 16px;text-align:center}
+  .phone{margin-left:0}
+}
+@media(max-height:580px) and (min-width:901px){.sidebar{position:static}}
+@media print{
+ .workspace{display:block;width:100%;padding:0}
+ .sidebar,.bottom-chin{display:none!important}
+ .stage{padding:0;overflow:visible;text-align:left}
+ .phone{width:100%!important;border:0;border-radius:0;padding:0;background:none;box-shadow:none}
+ .screen{border-radius:0;box-shadow:none}
+}
+</style>
+</head>
+<body>
+<main class="app">
+<div class="workspace">
+<aside class="sidebar" aria-label="详情页预览控制面板">
+<header class="intro">
+  <p class="eyebrow">LOCAL PRODUCT PREVIEW</p>
+  <h1 id="page-title">详情页切片 · 手机连续预览</h1>
+  <p id="page-description">选择一个图片文件夹，自动按数字顺序加载切片。支持 JPG / PNG / GIF / WEBP 等格式。</p>
+</header>
+<div class="toolbar" role="group" aria-label="预览控制栏">
+  <div class="toolbar-info">
+    <span class="toolbar-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2.2"/><path d="M10.5 5h3M11.5 19h1"/></svg></span>
+    <div><strong>手机详情页预览</strong><small><span id="image-count">0</span> 张切片 &nbsp;|&nbsp; <span id="screen-width">390</span>px 屏宽</small></div>
+  </div>
+  <div class="toolbar-actions">
+    <button class="pick-folder" type="button" data-pick-folder>
+      <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" stroke-linecap="round"><path d="M3 6.5a2 2 0 0 1 2-2h4.1l2 2.2H19a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v7M8.5 14.5h7"/></svg>
+      <span>选择文件夹</span>
+    </button>
+    <input id="folder-input" class="file-input" type="file" webkitdirectory directory multiple accept="image/*" aria-label="选择包含图片切片的文件夹" tabindex="-1">
+    <button id="eagle-load" class="pick-folder eagle-load" type="button" hidden aria-label="从 Eagle 当前选中商品加载详情页">从 Eagle 加载</button>
+    <div class="zoom-controls">
+      <label for="zoom-slider">缩放</label>
+      <input id="zoom-slider" type="range" min="60" max="160" step="5" value="100" aria-label="调整手机预览比例">
+      <output id="zoom-value" for="zoom-slider" aria-live="off">100%</output>
+      <button id="zoom-reset" type="button">重置</button>
+    </div>
+  </div>
+</div>
+<div class="sidebar-status">
+  <footer class="end" id="load-status" role="status" aria-live="polite">图片仅在本地浏览器中读取，不上传网络 · 只读取所选文件夹的直属图片</footer>
+</div>
+</aside>
+<section class="preview-column" aria-label="手机详情页预览画布">
+<div class="stage" aria-label="无限高手机外框详情页">
+  <div class="phone" id="phone">
+    <div class="screen">
+      <div class="statusbar" aria-hidden="true">
+        <span>9:41</span>
+        <span class="island"></span>
+        <span class="status-icons">
+          <svg width="15" height="13" viewBox="0 0 15 13"><path d="M1 10h2v2H1zM4.5 7h2v5h-2zM8 4h2v8H8zM11.5 1h2v11h-2z"/></svg>
+          <svg width="16" height="13" viewBox="0 0 16 13"><path d="M1 4.5a11 11 0 0 1 14 0L13.1 7a8.1 8.1 0 0 0-10.2 0zM4.5 8.2a6 6 0 0 1 7 0L8 12z"/></svg>
+          <svg width="23" height="13" viewBox="0 0 23 13"><rect x=".5" y="1" width="19" height="11" rx="3" fill="none" stroke="currentColor"/><rect x="2.5" y="3" width="15" height="7" rx="1.5"/><path d="M21 4v5a2.5 2.5 0 0 0 0-5"/></svg>
+        </span>
+      </div>
+      <div class="empty-state" id="empty-state">
+        <span class="empty-icon" aria-hidden="true"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M8 16l3-3 2.5 2.5 2.5-3.5 3 4"/></svg></span>
+        <h2 id="empty-heading">选择详情页图片文件夹</h2>
+        <p id="empty-hint">选中包含切片图片的文件夹，立即按文件名顺序展示。也可把文件夹直接拖到此窗口。</p>
+        <button class="empty-action" type="button" data-pick-folder>选择文件夹</button>
+      </div>
+      <section class="images" id="images" aria-label="商品详情图连续浏览" hidden></section>
+      <div class="bottom-chin" aria-hidden="true"></div>
+    </div>
+  </div>
+</div>
+</section>
+</div>
+</main>
+<div class="drop-overlay" id="drop-overlay" aria-hidden="true"><strong>松开鼠标，加载图片</strong><span>支持将图片文件夹或多张图片拖入窗口</span></div>
+<script>
+(function(){
+  'use strict';
+  const slider=document.getElementById('zoom-slider');
+  const zoomLabel=document.getElementById('zoom-value');
+  const widthLabel=document.getElementById('screen-width');
+  const phone=document.getElementById('phone');
+  const countLabel=document.getElementById('image-count');
+  const input=document.getElementById('folder-input');
+  const eagleLoadBtn=document.getElementById('eagle-load');
+  const images=document.getElementById('images');
+  const empty=document.getElementById('empty-state');
+  const emptyTitle=document.getElementById('empty-heading');
+  const emptyHint=document.getElementById('empty-hint');
+  const title=document.getElementById('page-title');
+  const subtitle=document.getElementById('page-description');
+  const status=document.getElementById('load-status');
+  const collator=new Intl.Collator('zh-CN',{numeric:true,sensitivity:'base'});
+  const validExt=/\.(?:jpe?g|png|gif|webp|avif|bmp)$/i;
+  let activeUrls=[];
+  let requestId=0;
+  let dragging=0;
+  let failures=0;
+
+  function baseWidth(){return Math.min(390,Math.max(220,window.innerWidth-50));}
+  function renderZoom(){
+    const pct=Number(slider.value)||100;
+    const w=Math.round(baseWidth()*pct/100);
+    phone.style.setProperty('--screen-width',w+'px');
+    zoomLabel.textContent=pct+'%';
+    widthLabel.textContent=w;
+    slider.setAttribute('aria-valuetext',pct+'% / '+w+'px');
+  }
+  slider.addEventListener('input',renderZoom);
+  slider.addEventListener('change',renderZoom);
+  document.getElementById('zoom-reset').addEventListener('click',()=>{slider.value='100';renderZoom();});
+  window.addEventListener('resize',renderZoom);
+  renderZoom();
+
+  document.querySelectorAll('[data-pick-folder]').forEach(button=>{
+    button.addEventListener('click',()=>input.click());
+  });
+  function releaseUrls(){
+    for(const url of activeUrls)URL.revokeObjectURL(url);
+    activeUrls=[];
+  }
+  window.addEventListener('pagehide',releaseUrls);
+  function showEmpty(heading,hint){
+    emptyTitle.textContent=heading;
+    emptyHint.textContent=hint;
+    empty.hidden=false;
+    images.hidden=true;
+  }
+  function loadFiles(files,folderName,token){
+    if(token!==requestId)return;
+    const all=Array.from(files||[]);
+    const chosen=all.filter(file=>file&&file.name&&validExt.test(file.name))
+      .sort((a,b)=>collator.compare(a.name,b.name)||a.name.localeCompare(b.name,'zh-CN'));
+    const name=folderName||'拖入的图片';
+    const skipped=all.length-chosen.length;
+    images.replaceChildren();
+    releaseUrls();
+    failures=0;
+    countLabel.textContent=String(chosen.length);
+    title.textContent=name+' · 详情页预览';
+    document.title=name+'｜手机连续预览';
+    if(chosen.length===0){
+      showEmpty('没有发现可预览的图片','请直接选择存放详情页切片的文件夹。不会扫描内部子文件夹。');
+      subtitle.textContent='当前文件夹：'+name+' · 未发现支持的图片';
+      status.textContent='支持 JPG、JPEG、PNG、GIF、WEBP、AVIF、BMP，未扫描子文件夹';
+      return;
+    }
+    const fragment=document.createDocumentFragment();
+    chosen.forEach((file,index)=>{
+      const url=URL.createObjectURL(file);
+      activeUrls.push(url);
+      const figure=document.createElement('figure');
+      const img=document.createElement('img');
+      img.src=url;
+      img.alt='详情图 '+(index+1)+'：'+file.name;
+      img.loading=index<2?'eager':'lazy';
+      img.decoding='async';
+      img.addEventListener('error',()=>{
+        if(token!==requestId)return;
+        failures++;
+        const msg=document.createElement('span');
+        msg.className='broken-image';
+        msg.textContent='图片读取失败：'+file.name;
+        img.replaceWith(msg);
+        status.textContent='共 '+chosen.length+' 张图片，'+failures+' 张读取失败 · 原图未修改';
+      },{once:true});
+      figure.appendChild(img);
+      fragment.appendChild(figure);
+    });
+    images.appendChild(fragment);
+    images.hidden=false;
+    empty.hidden=true;
+    subtitle.textContent='共 '+chosen.length+' 张 · 自然排序 · GIF 保留动画 · 仅加载所选目录直属图片';
+    status.textContent='已加载 '+chosen.length+' 张图片'+(skipped?' · 跳过 '+skipped+' 个非图片文件':'')+' · 原图未拼接、未修改';
+  }
+  input.addEventListener('change',()=>{
+    const files=Array.from(input.files||[]);
+    input.value='';
+    if(!files.length)return;
+    const token=++requestId;
+    const first=files[0].webkitRelativePath||'';
+    const folder=first.split('/')[0]||'所选文件夹';
+    // webkitdirectory also includes nested files: keep only direct children.
+    const rootFiles=files.filter(file=>{
+      const rel=file.webkitRelativePath||'';
+      return !rel||rel.split('/').length===2;
+    });
+    loadFiles(rootFiles,folder,token);
+  });
+
+  function entryToFile(entry){
+    return new Promise(resolve=>entry.file(resolve,()=>resolve(null)));
+  }
+  async function readDirectory(dir){
+    const reader=dir.createReader();
+    const entries=[];
+    while(true){
+      const batch=await new Promise((resolve,reject)=>reader.readEntries(resolve,reject));
+      if(!batch.length)break;
+      entries.push(...batch);
+    }
+    const files=await Promise.all(entries.filter(item=>item.isFile).map(entryToFile));
+    return files.filter(Boolean);
+  }
+  function isFileDrag(event){
+    return Array.from((event.dataTransfer&&event.dataTransfer.types)||[]).includes('Files');
+  }
+  document.addEventListener('dragenter',event=>{
+    if(!isFileDrag(event))return;
+    event.preventDefault();
+    dragging++;
+    document.body.classList.add('is-dragging');
+  });
+  document.addEventListener('dragover',event=>{
+    if(!isFileDrag(event))return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect='copy';
+  });
+  document.addEventListener('dragleave',event=>{
+    if(!isFileDrag(event))return;
+    dragging=Math.max(0,dragging-1);
+    if(dragging===0)document.body.classList.remove('is-dragging');
+  });
+  document.addEventListener('drop',async event=>{
+    if(!isFileDrag(event))return;
+    event.preventDefault();
+    dragging=0;
+    document.body.classList.remove('is-dragging');
+    const token=++requestId;
+    const dt=event.dataTransfer;
+    const entries=Array.from(dt.items||[])
+      .filter(item=>item.kind==='file'&&typeof item.webkitGetAsEntry==='function')
+      .map(item=>item.webkitGetAsEntry()).filter(Boolean);
+    const directory=entries.find(entry=>entry.isDirectory);
+    if(directory){
+      status.textContent='正在读取文件夹：'+directory.name+'…';
+      try{
+        const files=await readDirectory(directory);
+        if(token===requestId)loadFiles(files,directory.name,token);
+      }catch(err){
+        if(token===requestId)status.textContent='无法读取拖入的文件夹，请改用「选择文件夹」按钮';
+      }
+      return;
+    }
+    const looseFiles=Array.from(dt.files||[]);
+    if(looseFiles.length){
+      loadFiles(looseFiles,'拖入的图片',token);
+    }else{
+      status.textContent='没有发现图片，请选择文件夹或拖入图片文件';
+    }
+  });
+
+  // Eagle window-plugin bridge. The standalone HTML folder picker still works without Eagle.
+  const eaglePattern=/^(?:Tmall|Taobao)-(\d{8,16})-detail-(\d{3,4})$/;
+  function eagleFileUrl(item){
+    if(typeof item.fileURL==='string' && item.fileURL.startsWith('file:'))return item.fileURL;
+    if(typeof item.filePath!=='string'||!item.filePath)return '';
+    const segments=item.filePath.replace(/\\/g,'/').replace(/^\/+/,'').split('/');
+    return 'file:///'+segments.map((part,index)=>index===0&&/^[A-Za-z]:$/.test(part)?part:encodeURIComponent(part)).join('/');
+  }
+  // Never let Eagle's current "All"/batch selection override an explicitly selected image.
+  // Query results are not the authority for scope: item name, product and folder must agree.
+  async function eagleFolderById(api,id){
+    return id&&api.folder?.getById?await api.folder.getById(id):null;
+  }
+  async function eagleDetailFolderForImage(api,focus,productId){
+    for(const id of (focus.folders||[])){
+      const folder=await eagleFolderById(api,id);
+      if(!folder||folder.name!=='详情页')continue;
+      const parent=await eagleFolderById(api,folder.parent);
+      if(parent&&parent.name!==productId)continue;
+      return folder;
+    }
+    return null;
+  }
+  function filterEagleDetailRows(items,productId=null,folderId=null){
+    const rows=[];
+    for(const item of (items||[])){
+      const match=String(item.name||'').match(eaglePattern);
+      if(!match||!validExt.test('.'+String(item.ext||'')))continue;
+      if(productId&&match[1]!==productId)continue;
+      // Some host versions return a wider list for get({folders}). Enforce membership
+      // when item.folders is available; fail closed if a folder was explicitly chosen.
+      if(folderId&&(!Array.isArray(item.folders)||!item.folders.includes(folderId)))continue;
+      const url=eagleFileUrl(item);
+      if(!url)continue;
+      rows.push({productId:match[1],order:Number(match[2]),name:item.name,url});
+    }
+    return rows.sort((a,b)=>a.order-b.order);
+  }
+  async function chooseEagleDetailItems(){
+    const api=window.eagle;
+    const selectedFolders=await api.folder.getSelected();
+    if((selectedFolders||[]).length>1)throw Error('选中了多个文件夹，请只选择一个商品的详情页。');
+    const selected=selectedFolders&&selectedFolders[0];
+    let current=selected?await eagleFolderById(api,selected.id)||selected:null;
+    // Explicit detail-folder selection takes priority over a stale selected thumbnail.
+    if(current?.name==='详情页'){
+      const parent=await eagleFolderById(api,current.parent);
+      const pid=parent&&/^\d{8,16}$/.test(String(parent.name))?String(parent.name):null;
+      if(pid)return {items:await api.item.get({folders:[current.id]}),label:pid,productId:pid,folderId:current.id};
+    }
+    const chosen=await api.item.getSelected();
+    const picked=(chosen||[]).filter(x=>eaglePattern.test(String(x.name||'')));
+    const chosenProducts=new Set(picked.map(x=>String(x.name).match(eaglePattern)[1]));
+    if(chosenProducts.size>1)throw Error('选中了多个商品的图片，请只选一张详情图。');
+    if(picked.length){
+      const focus=picked[0];
+      const pid=[...chosenProducts][0];
+      const folder=await eagleDetailFolderForImage(api,focus,pid);
+      const items=folder
+        ?await api.item.get({folders:[folder.id]})
+        :await api.item.get({keywords:[pid+'-detail-']});
+      return {items,label:pid,productId:pid,folderId:folder?.id||null};
+    }
+    if(current){
+      let folder=current.name==='详情页'?current:null;
+      if(current.name==='主图'&&current.parent)
+        current=await eagleFolderById(api,current.parent)||current;
+      if(!folder)folder=(current.children||[]).find(child=>child.name==='详情页')||null;
+      if(folder){
+        const parent=await eagleFolderById(api,folder.parent);
+        const pid=parent&&/^\d{8,16}$/.test(String(parent.name))?String(parent.name):
+          /^\d{8,16}$/.test(String(current.name))?String(current.name):null;
+        if(!pid)throw Error('详情页文件夹必须位于单个商品 ID 文件夹下。');
+        return {items:await api.item.get({folders:[folder.id]}),label:pid,
+          productId:pid,folderId:folder.id};
+      }
+    }
+    throw Error('请在 Eagle 先选择某商品的「详情页」文件夹，或选中一张详情图。');
+  }
+  function displayEagleItems(items,label,token,productId=null,folderId=null){
+    const rows=filterEagleDetailRows(items,productId,folderId);
+    if(!rows.length)throw Error('当前选择中没有符合商品 ID 和详情页分类的图片。');
+    const products=new Set(rows.map(x=>x.productId));
+    if(products.size!==1)throw Error('当前目录包含多个商品，请先选择单个商品的「详情页」文件夹。');
+    const numbers=new Set(rows.map(x=>x.order));
+    if(numbers.size!==rows.length)throw Error('发现重复详情序号，无法安全排序。');
+    const missing=[];
+    for(let n=1;n<=rows[rows.length-1].order;n++)if(!numbers.has(n))missing.push(n);
+    images.replaceChildren();
+    releaseUrls();
+    failures=0;
+    countLabel.textContent=String(rows.length);
+    const name=[...products][0];
+    title.textContent=name+' · Eagle 详情预览';
+    document.title=name+'｜Eagle 手机预览';
+    const fragment=document.createDocumentFragment();
+    rows.forEach((entry,index)=>{
+      const figure=document.createElement('figure');
+      const img=document.createElement('img');
+      img.src=entry.url;
+      img.alt='详情图 '+entry.order+'：'+entry.name;
+      img.loading=index<2?'eager':'lazy';
+      img.decoding='async';
+      img.addEventListener('error',()=>{
+        if(token!==requestId)return;
+        failures++;
+        const msg=document.createElement('span');
+        msg.className='broken-image';
+        msg.textContent='Eagle 图片读取失败：'+entry.name;
+        img.replaceWith(msg);
+        status.textContent='Eagle 共 '+rows.length+' 张 · '+failures+' 张读取失败';
+      },{once:true});
+      figure.appendChild(img);
+      fragment.appendChild(figure);
+    });
+    images.appendChild(fragment);
+    images.hidden=false;
+    empty.hidden=true;
+    subtitle.textContent='商品 '+name+' · '+rows.length+' 张 · 直接读取 Eagle 原图（不复制）';
+    status.textContent='已加载 '+rows.length+' 张 Eagle 图片'+
+      (missing.length?' · 缺少序号 '+missing.join('、'):' · 连续序号完整')+
+      ' · GIF 保留动画';
+  }
+  async function loadFromEagle(){
+    const token=++requestId;
+    status.textContent='正在从 Eagle 读取当前商品…';
+    try{
+      const {items,label,productId,folderId}=await chooseEagleDetailItems();
+      if(token===requestId)displayEagleItems(items,label,token,productId,folderId);
+    }catch(err){
+      if(token===requestId){
+        status.textContent='Eagle 加载未完成：'+String(err.message||err);
+        if(images.hidden)showEmpty('请在 Eagle 选择商品详情页','选择「详情页」文件夹或任意一张详情图，再点击「从 Eagle 加载」。');
+      }
+    }
+  }
+  if(window.eagle?.item?.get&&window.eagle?.folder?.getSelected){
+    eagleLoadBtn.hidden=false;
+    eagleLoadBtn.addEventListener('click',loadFromEagle);
+    if(typeof window.eagle.onPluginCreate==='function')
+      window.eagle.onPluginCreate(()=>{loadFromEagle();});
+    if(typeof window.eagle.onPluginRun==='function')
+      window.eagle.onPluginRun(()=>{loadFromEagle();});
+    // Some host builds have already fired onPluginCreate before the page script runs.
+    Promise.resolve().then(loadFromEagle);
+  }
+  window.addEventListener('blur',()=>{
+    dragging=0;
+    document.body.classList.remove('is-dragging');
+  });
+})();
+</script>
+</body>
+</html>
+<!-- Universal offline image-folder preview; source images are not modified. -->

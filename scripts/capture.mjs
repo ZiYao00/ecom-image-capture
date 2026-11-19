@@ -14,6 +14,8 @@ import {captureSummary,updateProduct,readRegistry,acquireProductLock} from './ca
 import {resolveOutputRoot} from './capture-policy.mjs';
 import {verifyEagleReadback} from './eagle-readback.mjs';
 import {generateDetailPreview} from './html-preview.mjs';
+import {archiveEagleProduct, archiveRootForDate, eagleArchiveRpc} from './eagle-archive.mjs';
+import {storageModeFromConfig, eagleOnlyReceiptState} from './storage-mode.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -132,6 +134,8 @@ if (args[0] === '--copy-only') {
   if(indexed?.outputDir&&resolve(indexed.outputDir)!==resolve(dest,id))
     throw Error('Requested copy output differs from the recorded product outputDir');
   const copy = copyAssets(receipt, resolve(dest));
+  // Exporting temporary/local copies does not change the original capture mode.
+  receipt.lastExportAt=new Date().toISOString();
   Object.assign(receipt,repairCopyState(receipt,copy));
   receipt.localStatus=copy.copied===receipt.images.length&&!copy.errors.length?'complete':'incomplete';
   if(receipt.phase==='success'){ 
@@ -471,32 +475,64 @@ try {
     async itemIds=>eagleRpc('item_get',{ids:itemIds,fullDetails:true},60000));
   receipt.eagleReadbackAttempts=matched.attempts;
   receipt.images=matched.records;
-  receipt.errors.push(...matched.issues.map(x=>'Eagle mapping: '+x));
+  // Eagle can acknowledge an itemId while leaving a non-existent .info file.
+  // Verify physical material, not just index metadata, before accepting success.
+  const invalidFiles=[];
+  for(const record of receipt.images.filter(x=>x.verified)){
+    let material=false;
+    try{const s=statSync(record.filePath);material=s.isFile()&&s.size>0}catch{}
+    if(!material){
+      record.verified=false;
+      record.materialStatus='missing_physical_file';
+      invalidFiles.push('Eagle material missing: '+record.name);
+    }
+  }
+  receipt.errors.push(...matched.issues.map(x=>'Eagle mapping: '+x),...invalidFiles);
   mark('eagleReadback');
-  receipt.eagle=receipt.images.every(x=>x.verified)&&!matched.issues.length?'verified':'partially_verified';
+  receipt.eagle=receipt.images.every(x=>x.verified)&&!matched.issues.length&&!invalidFiles.length?'verified':'partially_verified';
 }catch(e){
   receipt.errors.push('Eagle: '+String(e?.message||e));
   receipt.eagle='uncertain_no_retry';
 }
-receipt.phase='copying';
+const storageMode=storageModeFromConfig(config);
+receipt.storageMode=storageMode;
+receipt.phase=storageMode==='copy'?'copying':'eagle_only';
 save();
-const copies=copyAssets(receipt,destRoot);
-Object.assign(receipt,repairCopyState(receipt,copies));
-receipt.localStatus=copies.copied===receipt.images.length&&!copies.errors.length?'complete':'incomplete';
-if(receipt.phase==='success'){ 
-  try{receipt.postprocess={...receipt.postprocess,html:generateDetailPreview(join(copies.destination,'detail'),{productId})};}
-  catch(e){receipt.postprocess={...receipt.postprocess,html:{status:'failed',error:String(e.message||e)}};}
+let copies;
+if(storageMode==='copy'){
+  copies=copyAssets(receipt,destRoot);
+  Object.assign(receipt,repairCopyState(receipt,copies));
+  receipt.localStatus=copies.copied===receipt.images.length&&!copies.errors.length?'complete':'incomplete';
+  if(receipt.phase==='success'){
+    try{receipt.postprocess={...receipt.postprocess,html:generateDetailPreview(join(copies.destination,'detail'),{productId})};}
+    catch(e){receipt.postprocess={...receipt.postprocess,html:{status:'failed',error:String(e.message||e)}};}
+  }
+}else{
+  Object.assign(receipt,eagleOnlyReceiptState(receipt,destRoot));
+  copies={copied:0,errors:[],destination:receipt.destination};
+}
+// Classification is an independent, readback-verified stage. Never repeat item_add.
+try {
+  receipt.archive = await archiveEagleProduct({
+    rpc: (name, params) => eagleArchiveRpc(eagleUrl, name, params),
+    productId, images: receipt.images,
+    rootName: config.eagleArchiveRootName || archiveRootForDate(), apply: true
+  });
+} catch (error) {
+  receipt.archive = {status:'needs_read_only_review', rootName:config.eagleArchiveRootName || archiveRootForDate(),
+    error:String(error?.message||error)};
 }
 receipt.totalMs=ms();
 save();
 await updateProduct(root,captureSummary(receipt,{url:canonical,outputDir:copies.destination}));
 console.log(JSON.stringify({
-  status:receipt.phase,productId,title:receipt.title,
+  status:receipt.phase,workflowStatus:receipt.phase==='success'&&receipt.archive?.status==='complete'?'complete':'incomplete',productId,title:receipt.title,
   main:receipt.selected.main,detail:receipt.selected.detail,
   submitted:selection.length,verified:receipt.images.filter(x=>x.verified).length,
   copied:copies.copied,destination:copies.destination,totalMs:ms(),
   eagleReadbackAttempts:receipt.eagleReadbackAttempts||0,
   html:receipt.postprocess?.html||{status:'skipped'},
+  archive:receipt.archive,
   timings:receipt.timings,errors:receipt.errors
 },null,2));
-if(receipt.phase!=='success')process.exitCode=2;
+if(receipt.phase!=='success'||receipt.archive?.status!=='complete')process.exitCode=2;

@@ -8,9 +8,11 @@ export const publicStatic = [
   'CHANGELOG.md','CONTRIBUTING.md','SECURITY.md',
   '.github/workflows/ci.yml','.github/ISSUE_TEMPLATE/bug_report.md',
   'package.json','package-lock.json','requirements-ocr.txt',
+  'html3.html','eagle-plugin/manifest.json','eagle-plugin/index.html','eagle-plugin/logo.png',
   'config/local.example.json','config/README.md',
   'docs/PIPELINE-RULES.md','docs/RECOVERY.md','docs/INSTALL-WINDOWS.md',
-  'docs/MCP-DEPENDENCIES.md','docs/GITHUB-RELEASE.md'
+  'docs/MCP-DEPENDENCIES.md','docs/GITHUB-RELEASE.md',
+  'docs/EAGLE-ARCHIVE-PLUGIN.md','docs/SHARED-RUNTIME.md'
 ];
 export const publicScripts = [
  'browser.mjs','capture.mjs','capture-policy.mjs','capture-store.mjs','captures.mjs',
@@ -20,7 +22,9 @@ export const publicScripts = [
  'package.mjs','probe-mcp.mjs','receipt-sync.mjs','reconcile-captures.mjs',
  'recover-direct.mjs','recover-known.mjs','recovery-core.mjs','setup.mjs',
  'stitch-core.mjs','stitch-detail.mjs','public-files.mjs','audit-public.mjs',
- 'browser-port.mjs','ecom.mjs'
+ 'browser-port.mjs','ecom.mjs','archive-product.mjs',
+  'eagle-archive.mjs','storage-mode.mjs','build-eagle-plugin.mjs',
+  'eagle-current.mjs','stitch-eagle-core.mjs','stitch-eagle.mjs'
 ];
 export function publicFiles(root){
  const scripts=publicScripts.map(x=>'scripts/'+x);
