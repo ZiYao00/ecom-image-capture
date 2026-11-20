@@ -11,7 +11,7 @@ export const publicStatic = [
   'html3.html','eagle-plugin/manifest.json','eagle-plugin/index.html','eagle-plugin/logo.png',
   'config/local.example.json','config/README.md',
   'docs/PIPELINE-RULES.md','docs/RECOVERY.md','docs/INSTALL-WINDOWS.md',
-  'docs/MCP-DEPENDENCIES.md','docs/GITHUB-RELEASE.md',
+  'docs/MCP-DEPENDENCIES.md','docs/GITHUB-RELEASE.md','docs/GIT-COLLABORATION.md',
   'docs/EAGLE-ARCHIVE-PLUGIN.md','docs/SHARED-RUNTIME.md'
 ];
 export const publicScripts = [

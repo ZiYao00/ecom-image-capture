@@ -1,6 +1,7 @@
 # ecom-image-capture｜Agent 执行约束
 
 > 入口：`README.md`；完整规范：`docs/PIPELINE-RULES.md`；恢复：`docs/RECOVERY.md`。**不需要 Agent 从几十份历史 HANDOFF 中推断规则**。确定性的规则必须由项目脚本和测试强制执行。
+> **跨电脑 Git/分支/PR/同步**：先读 `docs/GIT-COLLABORATION.md`，再根据当前主机读取存在的 `runtime/agent-guides/PC1-GIT-RUNBOOK.md` 或 `runtime/agent-guides/PC2-GIT-RUNBOOK.md`。本机指南不进入 GitHub；`main` 更新前检查工作树，Git commit 与 push 各自需授权。
 
 ## 标准执行（用户已授权的单商品任务）
 

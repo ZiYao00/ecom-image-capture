@@ -84,6 +84,7 @@ output/
 - [Eagle 自动归档、Agent 直读拼接与详情页窗口插件](docs/EAGLE-ARCHIVE-PLUGIN.md)
 - [可选共享 FFmpeg、FFprobe、OCR 运行时](docs/SHARED-RUNTIME.md)
 - [安全恢复和故障诊断](docs/RECOVERY.md)
+- [跨电脑 GitHub 主干、功能分支、PR 与安全同步 SOP](docs/GIT-COLLABORATION.md)
 - [GitHub 公开发布清单](docs/GITHUB-RELEASE.md)
 - [Agent 执行规范](AGENTS.md)
 - [English README](README.en.md)

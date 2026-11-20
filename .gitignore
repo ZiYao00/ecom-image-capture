@@ -41,6 +41,7 @@
 !/docs/INSTALL-WINDOWS.md
 !/docs/MCP-DEPENDENCIES.md
 !/docs/GITHUB-RELEASE.md
+!/docs/GIT-COLLABORATION.md
 
 # Runtime + safe recovery only. No historical migration/cleanup tools.
 !/scripts/
