@@ -9,6 +9,7 @@ import {BROWSER_IMAGE_HEADERS,fetchOriginalBytes,validateOriginalRepresentation,
 import {nextState,maySubmitSlot,needsOnlyReadback,createJob,createStoredJob,recordJobEvent,loadJob,acquireLibraryLock} from '../scripts/v3-job-state.mjs';
 import {resolveV3ExactMatch,eagleV2GetById,eagleV2AddFromPath} from '../scripts/v3-eagle-import.mjs';
 
+const sqliteTest = Number(process.versions.node.split('.')[0]) >= 24 ? test : test.skip;
 const id='ABCDEF12345678';
 const fakeRoot=()=>mkdtempSync(join(tmpdir(),'ecom-v3-'));
 const sha=data=>createHash('sha256').update(data).digest('hex');
@@ -99,7 +100,7 @@ test('V3 uses /item/get visible total, not countAll which includes excluded reco
   assert.match(requested[0],/\/item\/get/);
   assert.doesNotMatch(requested[0],/countAll/);
 });
-test('V3 SQLite indexes verified physical files and supports active-generation lookup',async()=>{
+sqliteTest('V3 SQLite indexes verified physical files and supports active-generation lookup',async()=>{
   const root=fakeRoot(),item=fixture(root);
   const records=await makeIndexRows(root,[item,{id:'X',ext:'mp4'}]);
   assert.equal(records.invalid.length,0);assert.equal(records.rows.length,1);
@@ -115,7 +116,7 @@ test('V3 SQLite indexes verified physical files and supports active-generation l
     assert.equal(db.lookup(digest).length,2);
   }finally{db.close()}
 });
-test('V3 indexes newly stitched output exactly once and adjusts visible count',async()=>{
+sqliteTest('V3 indexes newly stitched output exactly once and adjusts visible count',async()=>{
   const root=fakeRoot(), item=fixture(root),indexPath=join(root,'v3-index.sqlite');
   const db=await openFingerprintDatabase(indexPath,{libraryPath:root});
   db.writeGeneration([],{libraryItemTotal:0});db.close();

@@ -4,6 +4,8 @@ The project uses Semantic Versioning for public tags. Version labels describe **
 
 ## [Unreleased]
 
+- Windows CI: V3 experimental SQLite test cases are explicitly skipped below Node 24, preserving V2 verification on Node 22 without removing experimental coverage on Node 24.
+
 - Acceptance gate still open: a fresh PC2 product `680462386354` failed the **read-only** Tmall page scan (`incomplete_before_eagle`, access abnormal) on 2026-11-23. No Eagle image import was attempted; direct industry-folder creation plus complete long-image E2E for a newly captured product remains to be verified before merging this integration into `main`.
 
 - PC2 Eagle 实体行业分层：原有 29 个商品文件夹整体通过 `folder_update(parentId)` 移入一级行业（成人用品 19、3C数码 8、服饰内衣 2），原商品/主图/详情目录 ID 与 itemId 关联全部保留；11 个已完整商品的 750px 长图迁移后复核仍 complete。

@@ -10,6 +10,9 @@ import{loadJob,createJob,createStoredJob,recordJobEvent}from'../scripts/v3-job-s
 import{saveCacheFile}from'../scripts/v3-prefetch.mjs';
 import{v3WebReadItems}from'../scripts/v3-web-readback.mjs';
 
+// This entire integration suite exercises Node 24+ built-in SQLite. On Node 22,
+// V2 remains supported; keep the experimental suite explicitly skipped.
+const testSqlite = Number(process.versions.node.split('.')[0]) >= 24 ? test : test.skip;
 const png=Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000b49444154789c636000020000050001a5f645400000000049454e44ae426082','hex');
 const digest=createHash('sha256').update(png).digest('hex');
 const root=()=>mkdtempSync(join(tmpdir(),'ecom-v3-e2e-'));
@@ -33,7 +36,7 @@ async function openIndex(project,library,rows,libraryItemTotal) {
   db.writeGeneration(rows,{libraryItemTotal});db.close();
   return path;
 }
-test('V3 full mocked capture reuses the same verified Eagle bytes without item_add',async()=>{
+testSqlite('V3 full mocked capture reuses the same verified Eagle bytes without item_add',async()=>{
   const project=root(),library=join(project,'eagle');
   const row=eagleRecord(library,'ORIGINAL123',[]);
   const evidence=await makeIndexRows(library,[row]);
@@ -52,7 +55,7 @@ test('V3 full mocked capture reuses the same verified Eagle bytes without item_a
   assert.equal(imported,0);assert.equal(links,1);
   assert.equal(loadJob(project,id).slots[0].state,'verified');
 });
-test('V3 full mocked capture creates one new Eagle item, verifies it, updates index',async()=>{
+testSqlite('V3 full mocked capture creates one new Eagle item, verifies it, updates index',async()=>{
   const project=root(),library=join(project,'eagle');mkdirSync(library,{recursive:true});
   const indexPath=await openIndex(project,library,[],0);
   let imported=0,items=0,record=null;
@@ -69,7 +72,7 @@ test('V3 full mocked capture creates one new Eagle item, verifies it, updates in
   try{assert.equal(db.lookup(digest)[0].id,'NEWITEM12345');assert.equal(Number(db.info().libraryItemTotal),1)}
   finally{db.close()}
 });
-test('V3 uncertain item_add stops after one attempt and forbids a second run',async()=>{
+testSqlite('V3 uncertain item_add stops after one attempt and forbids a second run',async()=>{
   const project=root(),library=join(project,'eagle');mkdirSync(library,{recursive:true});
   const indexPath=await openIndex(project,library,[],0);
   let attempted=0;
@@ -84,7 +87,7 @@ test('V3 uncertain item_add stops after one attempt and forbids a second run',as
   await assert.rejects(()=>processV3ImportedImages(cfg),/EEXIST|already exists/);
   assert.equal(attempted,1);
 });
-test('V3 missing verified index generation leaves no durable job or Eagle import',async()=>{
+testSqlite('V3 missing verified index generation leaves no durable job or Eagle import',async()=>{
   const project=root(),library=join(project,'eagle');mkdirSync(library,{recursive:true});
   const path=join(project,'data','fingerprints','empty.sqlite');
   const db=await openFingerprintDatabase(path,{libraryPath:library});db.close();
@@ -99,7 +102,7 @@ test('V3 missing verified index generation leaves no durable job or Eagle import
   assert.equal(imports,0);
   assert.equal(loadJob(project,id),null);
 });
-test('V3 stale hash candidate never causes an unintended new import',async()=>{
+testSqlite('V3 stale hash candidate never causes an unintended new import',async()=>{
   const project=root(),library=join(project,'eagle');mkdirSync(library,{recursive:true});
   const path=await openIndex(project,library,[{id:'STALEITEM123',sha256:digest,size:png.length,
     ext:'png',name:'stale',width:1,height:1,mtime:0,folders:[]}],1);
@@ -114,7 +117,7 @@ test('V3 stale hash candidate never causes an unintended new import',async()=>{
   assert.equal(imports,0);
   assert.equal(loadJob(project,id).slots[0].state,'needs_read_only_review');
 });
-test('V3 proven zero-write recovery can reuse verified cached bytes without new prefetch',async()=>{
+testSqlite('V3 proven zero-write recovery can reuse verified cached bytes without new prefetch',async()=>{
   const project=root(),library=join(project,'eagle');mkdirSync(library,{recursive:true});
   const indexPath=await openIndex(project,library,[],0);
   const job=createJob({productId:id,url,libraryPath:library,slots:[slot]});
@@ -136,7 +139,7 @@ test('V3 proven zero-write recovery can reuse verified cached bytes without new 
   assert.equal(imported,1);assert.equal(fetched,0);
   assert.equal(loadJob(project,id).slots[0].state,'verified');
 });
-test('V3 cannot resume a job whose durable ledger contains an import intent',async()=>{
+testSqlite('V3 cannot resume a job whose durable ledger contains an import intent',async()=>{
   const project=root(),library=join(project,'eagle');mkdirSync(library,{recursive:true});
   const indexPath=await openIndex(project,library,[],0);
   const job=createJob({productId:id,url,libraryPath:library,slots:[slot]});createStoredJob(project,job);
@@ -150,7 +153,7 @@ test('V3 cannot resume a job whose durable ledger contains an import intent',asy
     importLocal:async()=>{imported++;throw Error('should never import')}}),/write intent exists/);
   assert.equal(imported,0);
 });
-test('V3 Web API readback recovers an item that Eagle MCP failed to list',async()=>{
+testSqlite('V3 Web API readback recovers an item that Eagle MCP failed to list',async()=>{
   const project=root(),library=join(project,'library');
   const row=eagleRecord(library,'EXISTING123');
   let count=0;
