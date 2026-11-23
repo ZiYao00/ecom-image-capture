@@ -7,10 +7,10 @@
 默认入口：`node scripts/ecom.mjs capture "<完整商品链接>"`。
 
 1. 使用完整 URL 扫描；从网页取得主图及详情图的明确顺序。
-2. Eagle MCP `item_add` **仅提交一次**；`item_get` 根据确切的素材 ID、名称、文件路径和尺寸回读。
-3. 通过 `scripts/eagle-archive.mjs` 自动建立/复用 `天猫批量采集_YYYY-MM-DD/<商品ID>/主图|详情页`，用 `item_add_to_folders` 仅建立文件夹关联，不重复下载图片，不删除原分类。
+2. Eagle MCP `item_add` **按最多 8 张分批提交，每张原图仅提交一次**；`item_get` 根据确切的素材 ID、实际文件路径和尺寸回读。新素材核验名称；Eagle「使用原图」时按商品图片位置映射到共享的真实 itemId，保留旧素材原名。
+3. 通过 `scripts/eagle-archive.mjs` 自动建立/复用 `电商平台批量采集/<行业>/<商品ID>/主图|详情页`，用 `item_add_to_folders` 仅建立文件夹关联，不重复下载图片，不删除原分类。
 4. 再次只读回查每个素材是否处于正确的 Eagle 子文件夹；`receipt.archive.status` 必须为 `complete` 才视为分类闭环完成。
-5. 图片的 Eagle 入库状态、本地副本状态、归档状态、HTML 和 OCR 后处理独立记录。任何一步不完整不得伪装成成功。
+5. 完整采集后自动拼接 750px 长图并回存商品根目录；Eagle 入库、本地副本、归档、长图、HTML 和 OCR 独立记录。任何一步不完整不得伪装成成功。
 
 归档命令仅查询和移动**文件夹关联**，不会调用 Eagle `item_add`：
 
@@ -18,8 +18,19 @@
 - `node scripts/ecom.mjs archive <商品ID> [YYYY-MM-DD]`：补分类、读取 Eagle 当前真实素材并保存独立对账快照；原始 receipt 不改写。
 - `node scripts/ecom.mjs stitch-eagle <商品ID> [宽度] [--check]`：直接从 Eagle 原图拼接，仅成品 JPG 回存 Eagle 商品根目录；默认按图片常见宽度，超长自动分段。
 - `node scripts/ecom.mjs export <商品ID>`：只在需要 OCR 或独立源图交付时复制原图到本地，不重新采集。
+- `node scripts/ecom.mjs migrate-eagle --check|--apply`：旧日期根目录合并工具，已兼容新的行业嵌套结构，不会把行业文件夹展平。
+- `node scripts/ecom.mjs industry-folders --check [ID]`：只读检查商品文件夹行业归属；`--apply <ID>|--all` 通过 `folder_update(parentId)` 迁移整个商品目录，保留主图、详情页和长图原 ID。移动前保存目录及全部 itemId 关联快照，不调用图片导入。
+- `node scripts/ecom.mjs recover-eagle <商品ID> --check|--apply`：只回存已经本地校验的缺图并单独保存日志；不确定的 `item_add` 禁止重试。
+- `node scripts/ecom.mjs finish <商品ID>`：历史商品在 Eagle 全部图片齐全时补做 750px 长图。
 
 **失败处理：** Eagle 返回素材 ID 不等于确认落库。PC1 Eagle 已实测「重复添加提示」在等待处理时不会产生可回读的实体文件；先检查 GUI 是否有该弹窗，仅对任务内已授权测试素材选择恰当处理，其他既有素材不可擅自覆盖。对 `item_add` 状态不确定的批次，先通过 `item_get` 查证，严禁自动重复提交。对 `folder_create`、`item_add_to_folders` 状态不确定的写入也先只读检查。GIF 等动态素材必须校验实际可读及帧信息，不把本地直连补图冒充 Eagle 完整。
+
+### 新增：Eagle「使用原图」无需重复入库
+
+- `node scripts/ecom.mjs reconcile-reused <商品ID> --check|--apply`：对历史商品中可证明复用的图片位置建立映射，**零次 item_add**。只保存本机 `data/product-maps/<ID>.json`，不改变原图文件和初次失败回执。
+- `node scripts/ecom.mjs map-eagle <商品ID> --check|--apply`：从完整的 Eagle 原图现状生成/核验商品级映射，并将紧凑顺序信息写入「主图」「详情页」文件夹 `description`。如果文件夹已有其它文字说明，原文保留。重复运行应幂等。
+- 同一 Eagle itemId 可以在不同商品的 `详情页` 目录里共享。映射描述仅保存逻辑序号和原始 ID，不复制图片，也不重命名全局素材。新采集自动处理可唯一核验的复用；无法唯一确认时保留待核验，而非继续导入重复副本。
+- 插件的 `html3.html` 与 `eagle-plugin/index.html` 源码由 `node scripts/build-eagle-plugin.mjs` 同步；项目 Chrome + Eagle 实物联合预览测试不等于已经安装到 Eagle 原生窗口。PC1 更新主线后需要对本机库与插件分别验收。
 
 ## 2. 两种本地存储模式
 
@@ -43,7 +54,7 @@ PC1 已用独立 Eagle QA 商品实测，PC2 已用完整 50 张真实商品详�
 
 `html3.html` 是统一 UI 源码，保留普通文件夹选择、拖入、手机连续预览和缩放。运行在 Eagle 插件窗口时，额外显示「从 Eagle 加载」。
 
-使用官方 `eagle.folder.getSelected()`、`eagle.folder.getById()`、`eagle.item.get()` 和 `item.fileURL`；按 `Tmall-<商品ID>-detail-001` / `Taobao-<商品ID>-detail-001` 排序，并提示缺图。读取文件不会复制、覆盖 Eagle 原始图片。
+使用官方 `eagle.folder.getSelected()`、`eagle.folder.getById()`、`eagle.item.get()` 和 `item.fileURL`；优先读取「详情页」文件夹 description 中的商品级序号→itemId 映射（其他原有描述保留），按逻辑序号预览，包括同一 itemId 多位置复用；未映射的旧目录继续按 `Tmall-<商品ID>-detail-001` / `Taobao-<商品ID>-detail-001` 文件名兼容排序。读取文件不会复制、覆盖 Eagle 原始图片。
 
 在 PC1 或 PC2 项目目录执行：
 
@@ -56,7 +67,7 @@ node scripts/build-eagle-plugin.mjs
 - `eagle-plugin/manifest.json`
 - `eagle-plugin/index.html`
 - `eagle-plugin/logo.png`
-- `release/Eagle-Detail-Preview-0.1.1.eagleplugin`
+- `release/Eagle-Detail-Preview-0.1.2.eagleplugin`
 
 **PC1 Eagle 4.0 原生实测**：通过 Eagle「插件 → 开发者选项 → 导入本地项目」选择 `eagle-plugin` 文件夹注册，插件会出现于「开发」分类。已验证 3/3 张详情图片读取、原生弹窗、100%→150% 缩放。**仅复制文件到插件目录，在运行中的 Eagle 不一定完成注册**；或者用 Eagle 的安装/打包功能安装 `.eagleplugin`。仅开发测试时可将插件文件夹置于当前 Windows 用户 `%APPDATA%\\Eagle\\Plugins\\ECOMPREVIEW26`，需根据 Eagle 当前版本重新加载/重启后才可能出现在插件菜单。
 

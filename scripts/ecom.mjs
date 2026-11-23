@@ -131,7 +131,8 @@ function doctor(){
    ...(report.checks?.eagle?.status==='passed'?[]:[eagleHint])
   ]},report.readiness?.capture?0:10);
 }
-function capture(incoming,{scanOnly=false,resume=false}={}){
+function capture(incoming,{scanOnly=false,resume=false,v3=false}={}){
+  if(v3&&config().v3Experimental!==true){emit({status:'v3_experimental_disabled',message:'Enable v3Experimental only for an approved controlled trial; normal capture remains V2.'},10);return}
  if(!incoming.length||incoming.length>2){emit({status:'invalid_arguments',usage:resume?'ecom resume <productId> [outputRoot]':'ecom capture "<full URL>" [outputRoot]'},2);return}
  const [target,dest]=incoming;
  if(resume&&!/^[0-9]{8,16}$/.test(target||'')){emit({status:'invalid_product_id'},2);return}
@@ -153,10 +154,10 @@ function capture(incoming,{scanOnly=false,resume=false}={}){
   return;
  }
  const childArgs=resume?['--resume-existing',target,...(dest?[dest]:[])]:
-   scanOnly?['--dry-run',target]:[target,...(dest?[dest]:[])];
+   scanOnly?['--dry-run',target]:v3?['--v3',target,...(dest?[dest]:[])]:[target,...(dest?[dest]:[])];
  const result=node('capture.mjs',childArgs,420000);
  emit({status:result.ok?'completed':'failed_no_automatic_retry',
-   operation:resume?'resume':scanOnly?'scan':'capture',exitCode:result.code,
+   operation:resume?'resume':scanOnly?'scan':v3?'capture-v3':'capture',exitCode:result.code,
    result:result.output||result.stdout, ...(result.ok?{}:{error:result.error,nextActions:[noRestart]})},
   result.ok?0:2);
 }
@@ -173,6 +174,33 @@ switch(command){
  }
  case 'doctor':if(args.length)emit({status:'invalid_arguments',usage:'ecom doctor'},2);else doctor();break;
  case 'capture':capture(args);break;
+  case 'capture-v3':capture(args,{v3:true});break;
+  case 'v3-resume':if(args.length!==2||!['--check','--apply'].includes(args[0])||!/^[0-9]{8,16}$/.test(args[1]))emit({status:'invalid_arguments',usage:'ecom v3-resume --check|--apply <productId>'},2);
+    else simple('v3-resume-no-write.mjs',args,{operation:'v3-resume',timeout:540000});break;
+  case 'v3-index':if(args.length<1||args.length>2||!['--check','--build'].includes(args[0]))emit({status:'invalid_arguments',usage:'ecom v3-index --check [count]|--build'},2);
+    else simple('v3-index.mjs',args,{operation:'v3-index',timeout:300000});break;
+  case 'v3-prefetch':if(args.length!==2||!['--check','--cache'].includes(args[0])||!/^[0-9]{8,16}$/.test(args[1]))emit({status:'invalid_arguments',usage:'ecom v3-prefetch --check|--cache <existingProductId>'},2);
+    else simple('v3-verify-prefetch.mjs',args,{operation:'v3-prefetch',timeout:300000});break;
+  case 'batch':if(args.length<1||args.length>2||
+     (args[1]&&!['--check','--apply'].includes(args[1])))
+    emit({status:'invalid_arguments',usage:'ecom batch <urls.txt|urls.json> [--check|--apply]'},2);
+   else simple('batch-capture.mjs',[args[1]||'--check',args[0]],{operation:'batch',timeout:3600000});break;
+  case 'recover-duplicates':if(args.length!==2||!/^[0-9]{8,16}$/.test(args[0])||
+      !['--check','--apply'].includes(args[1]))
+    emit({status:'invalid_arguments',usage:'ecom recover-duplicates <productId> --check|--apply'},2);
+   else simple('recover-duplicates.mjs',args,{operation:'recover-duplicates',timeout:360000});break;
+  case 'map-eagle':if(args.length!==2||!/^[0-9]{8,16}$/.test(args[0])||
+      !['--check','--apply'].includes(args[1]))
+    emit({status:'invalid_arguments',usage:'ecom map-eagle <productId> --check|--apply'},2);
+   else simple('map-eagle-product.mjs',args,{operation:'map-eagle',timeout:180000});break;
+  case 'reconcile-reused':if(args.length!==2||!/^[0-9]{8,16}$/.test(args[0])||
+      !['--check','--apply'].includes(args[1]))
+    emit({status:'invalid_arguments',usage:'ecom reconcile-reused <productId> --check|--apply'},2);
+   else simple('reconcile-reused.mjs',args,{operation:'reconcile-reused',timeout:180000});break;
+  case 'verify-live':if(args.length!==2||!/^[0-9]{8,16}$/.test(args[0])||
+       !['--check','--apply'].includes(args[1]))
+    emit({status:'invalid_arguments',usage:'ecom verify-live <productId> --check|--apply'},2);
+   else simple('verify-live-product.mjs',args,{operation:'verify-live',timeout:180000});break;
  case 'scan':capture(args,{scanOnly:true});break;
  case 'resume':capture(args,{resume:true});break;
  case 'export':if(args.length!==1||!/^[0-9]{8,16}$/.test(args[0]))emit({status:'invalid_arguments',usage:'ecom export <productId>'},2);
@@ -180,6 +208,21 @@ switch(command){
  case 'stitch-eagle':if(!args.length||!/^[0-9]{8,16}$/.test(args[0])||args.length>5)
     emit({status:'invalid_arguments',usage:'ecom stitch-eagle <productId> [width] [--date YYYY-MM-DD] [--check]'},2);
    else simple('stitch-eagle.mjs',args,{operation:'stitch-eagle',timeout:480000});break;
+ case 'migrate-eagle':if(args.length!==1||!['--check','--apply'].includes(args[0]))
+    emit({status:'invalid_arguments',usage:'ecom migrate-eagle --check|--apply'},2);
+   else simple('migrate-eagle-folders.mjs',args,{operation:'migrate-eagle',timeout:180000});break;
+ case 'recover-eagle':if(args.length!==2||!/^[0-9]{8,16}$/.test(args[0])||
+     !['--check','--apply'].includes(args[1]))
+    emit({status:'invalid_arguments',usage:'ecom recover-eagle <productId> --check|--apply'},2);
+   else simple('recover-eagle-local.mjs',args,{operation:'recover-eagle',timeout:180000});break;
+ case 'finish':if(args.length!==1||!/^[0-9]{8,16}$/.test(args[0]))
+    emit({status:'invalid_arguments',usage:'ecom finish <productId>'},2);
+   else {
+     const checked=node('archive-product.mjs',[args[0],'--check'],90000);
+     if(!checked.ok)emit({status:'blocked_incomplete_eagle_sources',operation:'finish',
+       preflight:checked.output||checked.stdout,error:checked.error},2);
+     else simple('stitch-eagle.mjs',[args[0],'750'],{operation:'finish',timeout:480000});
+   }break;
  case 'archive':if(!args.length||!/^[0-9]{8,16}$/.test(args[0])||args.length>3)emit({status:'invalid_arguments',usage:'ecom archive <productId> [YYYY-MM-DD] [--check]'},2);
   else simple('archive-product.mjs',args,{operation:'archive',timeout:180000});break;
  case 'stitch':{
@@ -198,15 +241,39 @@ switch(command){
   else simple('setup-ocr.mjs',['--install'],{operation:'ocr-install',timeout:360000});break;
  case 'browser':if(args.length!==1||!['start','status'].includes(args[0]))emit({status:'invalid_arguments',usage:'ecom browser start|status'},2);
   else simple('browser.mjs',args,{operation:'browser',timeout:45000});break;
- case 'list':if(args.length)emit({status:'invalid_arguments',usage:'ecom list'},2);
+ case 'industry-folders':if(!args.length||!['--check','--apply','--rollback'].includes(args[0])||args.length>3)
+    emit({status:'invalid_arguments',usage:'ecom industry-folders --check [ID]|--apply <ID>|--all|--rollback <ID> [--apply]'},2);
+    else simple('industry-folder-cli.mjs',args,{operation:'industry-folders',timeout:600000});break;
+ case 'industry':if(!args.length||!['--check','--apply','--sync-eagle','--set','--list'].includes(args[0]))
+    emit({status:'invalid_arguments',usage:'ecom industry --check|--apply|--sync-eagle [ID] | --set ID industry subcategory | --list [industry]'},2);
+    else simple('industry-cli.mjs',args,{operation:'industry',timeout:480000});break;
+  case 'list':if(args.length)emit({status:'invalid_arguments',usage:'ecom list'},2);
   else simple('captures.mjs',['list'],{operation:'list'});break;
  case 'help':
  default:emit({status:'help',usage:[
   'ecom setup [--check]  - install local dependencies, initialize, start Chrome, check Eagle',
   'ecom doctor           - read-only environment diagnosis',
   'ecom capture "<full Tmall URL>" [outputRoot]',
-  'ecom scan "<full Tmall URL>" - read-only browser scan; no Eagle item_add',
+   'ecom v3-index --check [count]|--build - inspect/build local Eagle SHA-256 index',
+   'ecom v3-prefetch --check|--cache <existingProductId> - test exact-byte CDN fetch without Eagle writes',
+   'ecom v3-resume --check|--apply <productId> - only when event ledger proves zero Eagle writes',
+   'ecom industry-folders --check [ID] | --apply <ID>|--all | --rollback <ID> [--apply] - move/restore full Eagle product folders',
+   'ecom industry --check [productId] - preview category classification without writes',
+   'ecom industry --apply [productId] - persist product-level industry metadata only',
+   'ecom industry --sync-eagle [productId] - materialize tags and native smart-folder views',
+   'ecom industry --set <productId> <industryCode> <subcategoryCode> - manual-locked correction',
+   'ecom industry --list [industryCode] - list stored classifications',
+   'ecom capture-v3 "<full Tmall URL>" [outputRoot] - EXPERIMENTAL; disabled unless local config enables v3Experimental',
+  'ecom batch <urls.txt|urls.json> [--check|--apply] - serial multi-URL batch, no duplicate imports',
+   'ecom map-eagle <productId> --check|--apply - verify and mirror product-level order map',
+   'ecom reconcile-reused <productId> --check|--apply - map proven reused source without new imports',
+   'ecom verify-live <productId> --check|--apply - reconcile current Eagle archive and long image into registry',
+   'ecom recover-duplicates <productId> --check|--apply - optional exact duplicate recovery (max 10, verified local images)',
+   'ecom scan "<full Tmall URL>" - read-only browser scan; no Eagle item_add',
   'ecom resume <productId> [outputRoot] - explicit safe resume only',
+  'ecom migrate-eagle --check|--apply - move existing Eagle product folders under one root; retain item IDs',
+  'ecom recover-eagle <productId> --check|--apply - recover verified local fallback files, no blind retry',
+  'ecom finish <productId> - verify existing archive then stitch only the finished long image',
   'ecom archive <productId> [YYYY-MM-DD] [--check] - reconcile current Eagle files, preserves original receipt',
   'ecom stitch-eagle <productId> [width] [--date YYYY-MM-DD] [--check] - read Eagle originals, stitch, import JPEGs only',
   'ecom export <productId> - copy already verified Eagle images for OCR/stitch/export, without re-import',

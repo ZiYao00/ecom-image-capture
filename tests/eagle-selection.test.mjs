@@ -15,9 +15,9 @@ function item(pid,n,folders=[folderId]){
  return {id:pid+'-'+n,name:'Tmall-'+pid+'-detail-'+String(n).padStart(3,'0'),
   ext:'jpg',fileURL:'file:///mock/'+pid+'/'+n+'.jpg',folders};
 }
-function mock({selected=[],selectedFolders=[],extra=[],searchResults=[]}={}){
+function mock({selected=[],selectedFolders=[],extra=[],searchResults=[],folderDescription=''}={}){
  const folders={
- [folderId]:{id:folderId,name:'详情页',parent:product},
+ [folderId]:{id:folderId,name:'详情页',parent:product,description:folderDescription},
  [product]:{id:product,name:product,parent:'BATCH',children:[{id:folderId,name:'详情页',parent:product}]},
  ROOT:{id:'ROOT',name:'全部',children:[]}
  };
@@ -83,6 +83,34 @@ test('explicit detail folder wins over stale selected image from another product
  assert.equal(choice.productId,product);
  assert.deepEqual(Array.from(m.filterEagleDetailRows(choice.items,choice.productId,choice.folderId),x=>x.order),[1]);
 });
+test('folder metadata maps a shared original to several current-product slots',async()=>{
+ const shared={id:'SHAREDORIGINAL001',name:'Tmall-'+other+'-detail-029',
+  ext:'png',fileURL:'file:///mock/shared.png',folders:[folderId]};
+ const normal=item(product,1);
+ const metadata='[ECOM-PRODUCT-MAP-V1]\n'+JSON.stringify({
+  v:1,pid:product,c:'detail',items:[[1,normal.id],[2,shared.id],[3,shared.id]]
+ })+'\n[/ECOM-PRODUCT-MAP-V1]';
+ const m=mock({selectedFolders:[{id:folderId,name:'详情页'}],extra:[normal,shared],
+  folderDescription:metadata});
+ const choice=await m.chooseEagleDetailItems();
+ assert.equal(choice.folderMap.pid,product);
+ const rows=m.filterEagleDetailRows(choice.items,choice.productId,choice.folderId,choice.folderMap);
+ assert.deepEqual(Array.from(rows,x=>x.order),[1,2,3]);
+ assert.equal(rows[1].name,'Tmall-'+product+'-detail-002');
+ assert.equal(rows[2].url,rows[1].url);
+ assert.equal(rows[1].originalName,shared.name);
+});
+test('mapped folder does not ignore a missing Eagle asset',async()=>{
+ const metadata='[ECOM-PRODUCT-MAP-V1]\n'+JSON.stringify({
+  v:1,pid:product,c:'detail',items:[[1,'MISSINGITEM999']]
+ })+'\n[/ECOM-PRODUCT-MAP-V1]';
+ const m=mock({selectedFolders:[{id:folderId,name:'详情页'}],extra:[item(product,1)],
+  folderDescription:metadata});
+ const choice=await m.chooseEagleDetailItems();
+ assert.throws(()=>m.filterEagleDetailRows(choice.items,choice.productId,choice.folderId,choice.folderMap),
+  /不存在或未关联/);
+});
+
 test('selected product parent folder finds details and scopes to its ID',async()=>{
  const m=mock({selectedFolders:[{id:product,name:product}],extra:[item(product,1),item(other,2)]});
  const choice=await m.chooseEagleDetailItems();

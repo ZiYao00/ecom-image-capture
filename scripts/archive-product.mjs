@@ -6,7 +6,7 @@ import {resolve,join,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import {acquireProductLock} from './capture-store.mjs';
-import {archiveEagleProduct,eagleArchiveRpc} from './eagle-archive.mjs';
+import {archiveEagleProduct,eagleArchiveRpc,ECOM_ARCHIVE_ROOT} from './eagle-archive.mjs';
 import {readCurrentEagleProduct,hashEagleFile} from './eagle-current.mjs';
 
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
@@ -39,7 +39,7 @@ try{
     if(!current.folders){
       // Never guess today's batch for a historical product.
       if(!rootName)throw Error('Historical Eagle root not found. Supply YYYY-MM-DD explicitly.');
-      await archiveEagleProduct({rpc,productId,images:receipt.images,rootName,apply:true});
+      await archiveEagleProduct({rpc,productId,images:receipt.images,rootName:ECOM_ARCHIVE_ROOT,apply:true});
       current=await read();
     }
     if(current.folders?.mainFolderId&&current.folders?.detailFolderId){

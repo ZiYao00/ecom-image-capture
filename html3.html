@@ -391,7 +391,39 @@ body.is-dragging .drop-overlay{opacity:1;visibility:visible}
     }
     return null;
   }
-  function filterEagleDetailRows(items,productId=null,folderId=null){
+  function parseEagleFolderMap(description,productId){
+    const text=String(description||'');
+    const start='[ECOM-PRODUCT-MAP-V1]',end='[/ECOM-PRODUCT-MAP-V1]';
+    const a=text.indexOf(start),b=text.indexOf(end);
+    if(a<0&&b<0)return null;
+    if(a<0||b<a||text.indexOf(start,a+start.length)!==-1)
+      throw Error('Eagle 映射标记不完整或重复，请重新校验商品映射。');
+    const data=JSON.parse(text.slice(a+start.length,b).trim());
+    if(data.v!==1||data.pid!==productId||data.c!=='detail'||
+       !Array.isArray(data.items)||!data.items.every(x=>Array.isArray(x)&&x.length===2&&
+         Number.isInteger(x[0])&&x[0]>0&&typeof x[1]==='string'&&x[1].length>5))
+      throw Error('Eagle 商品映射数据无效。');
+    const positions=new Set(data.items.map(x=>x[0]));
+    if(positions.size!==data.items.length||[...positions].some((x,i)=>!positions.has(i+1)))
+      throw Error('商品详情映射序号不连续。');
+    return data;
+  }
+  function filterEagleDetailRows(items,productId=null,folderId=null,folderMap=null){
+    if(folderMap){
+      const byId=new Map((items||[]).map(x=>[x.id,x]));
+      const rows=[];
+      for(const [order,itemId] of [...folderMap.items].sort((a,b)=>a[0]-b[0])){
+        const item=byId.get(itemId);
+        if(!item||!validExt.test('.'+String(item.ext||''))||
+           !Array.isArray(item.folders)||!item.folders.includes(folderId))
+          throw Error('Eagle 映射素材不存在或未关联当前商品：'+itemId);
+        const url=eagleFileUrl(item);
+        if(!url)throw Error('Eagle 映射素材文件路径缺失：'+itemId);
+        rows.push({productId:folderMap.pid,order,name:'Tmall-'+folderMap.pid+
+          '-detail-'+String(order).padStart(3,'0'),originalName:item.name,url,itemId});
+      }
+      return rows;
+    }
     const rows=[];
     for(const item of (items||[])){
       const match=String(item.name||'').match(eaglePattern);
@@ -416,7 +448,8 @@ body.is-dragging .drop-overlay{opacity:1;visibility:visible}
     if(current?.name==='详情页'){
       const parent=await eagleFolderById(api,current.parent);
       const pid=parent&&/^\d{8,16}$/.test(String(parent.name))?String(parent.name):null;
-      if(pid)return {items:await api.item.get({folders:[current.id]}),label:pid,productId:pid,folderId:current.id};
+      if(pid)return {items:await api.item.get({folders:[current.id]}),label:pid,
+          productId:pid,folderId:current.id,folderMap:parseEagleFolderMap(current.description,pid)};
     }
     const chosen=await api.item.getSelected();
     const picked=(chosen||[]).filter(x=>eaglePattern.test(String(x.name||'')));
@@ -429,7 +462,8 @@ body.is-dragging .drop-overlay{opacity:1;visibility:visible}
       const items=folder
         ?await api.item.get({folders:[folder.id]})
         :await api.item.get({keywords:[pid+'-detail-']});
-      return {items,label:pid,productId:pid,folderId:folder?.id||null};
+      return {items,label:pid,productId:pid,folderId:folder?.id||null,
+        folderMap:folder?parseEagleFolderMap(folder.description,pid):null};
     }
     if(current){
       let folder=current.name==='详情页'?current:null;
@@ -437,18 +471,19 @@ body.is-dragging .drop-overlay{opacity:1;visibility:visible}
         current=await eagleFolderById(api,current.parent)||current;
       if(!folder)folder=(current.children||[]).find(child=>child.name==='详情页')||null;
       if(folder){
+        folder=await eagleFolderById(api,folder.id)||folder;
         const parent=await eagleFolderById(api,folder.parent);
         const pid=parent&&/^\d{8,16}$/.test(String(parent.name))?String(parent.name):
           /^\d{8,16}$/.test(String(current.name))?String(current.name):null;
         if(!pid)throw Error('详情页文件夹必须位于单个商品 ID 文件夹下。');
         return {items:await api.item.get({folders:[folder.id]}),label:pid,
-          productId:pid,folderId:folder.id};
+          productId:pid,folderId:folder.id,folderMap:parseEagleFolderMap(folder.description,pid)};
       }
     }
     throw Error('请在 Eagle 先选择某商品的「详情页」文件夹，或选中一张详情图。');
   }
-  function displayEagleItems(items,label,token,productId=null,folderId=null){
-    const rows=filterEagleDetailRows(items,productId,folderId);
+  function displayEagleItems(items,label,token,productId=null,folderId=null,folderMap=null){
+    const rows=filterEagleDetailRows(items,productId,folderId,folderMap);
     if(!rows.length)throw Error('当前选择中没有符合商品 ID 和详情页分类的图片。');
     const products=new Set(rows.map(x=>x.productId));
     if(products.size!==1)throw Error('当前目录包含多个商品，请先选择单个商品的「详情页」文件夹。');
@@ -489,14 +524,14 @@ body.is-dragging .drop-overlay{opacity:1;visibility:visible}
     subtitle.textContent='商品 '+name+' · '+rows.length+' 张 · 直接读取 Eagle 原图（不复制）';
     status.textContent='已加载 '+rows.length+' 张 Eagle 图片'+
       (missing.length?' · 缺少序号 '+missing.join('、'):' · 连续序号完整')+
-      ' · GIF 保留动画';
+      ' · GIF 保留动画'+(folderMap?' · 按商品映射排序':'');
   }
   async function loadFromEagle(){
     const token=++requestId;
     status.textContent='正在从 Eagle 读取当前商品…';
     try{
-      const {items,label,productId,folderId}=await chooseEagleDetailItems();
-      if(token===requestId)displayEagleItems(items,label,token,productId,folderId);
+      const {items,label,productId,folderId,folderMap}=await chooseEagleDetailItems();
+      if(token===requestId)displayEagleItems(items,label,token,productId,folderId,folderMap);
     }catch(err){
       if(token===requestId){
         status.textContent='Eagle 加载未完成：'+String(err.message||err);

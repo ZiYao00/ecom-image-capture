@@ -4,6 +4,7 @@ import {readFileSync,writeFileSync,renameSync,mkdirSync,existsSync,rmSync} from 
 import {resolve,join,dirname} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {inspectLock,archiveStaleLock} from './lock-health.mjs';
+import {classifyProductTitle} from './industry-core.mjs';
 
 export const schemaVersion=1;
 const wait=ms=>new Promise(done=>setTimeout(done,ms));
@@ -49,8 +50,11 @@ export function captureSummary(receipt,options={}){
     directFallbackCount:Array.isArray(receipt.directFallback)?receipt.directFallback.length:0,
     localStatus:receipt.localStatus||null,
     storageMode:receipt.storageMode||'copy',archiveStatus:receipt.archive?.status||null,
-    workflowStatus:receipt.phase==='success'&&receipt.archive?.status==='complete'?'complete':'incomplete',
-    durationMs:Number.isFinite(receipt.totalMs)?receipt.totalMs:null,outputDir:outputDir?resolve(outputDir):null};
+    workflowStatus:receipt.phase==='success'&&receipt.archive?.status==='complete'&&
+      (!receipt.autoStitchEnabled||['complete','already_complete'].includes(receipt.postprocess?.stitch?.status))&&
+       (!receipt.productMap||receipt.productMap.status==='complete'&&receipt.productMap.mirrorStatus==='complete')?'complete':'incomplete',
+    durationMs:Number.isFinite(receipt.totalMs)?receipt.totalMs:null,outputDir:outputDir?resolve(outputDir):null,
+    ...(typeof receipt.title==='string'&&receipt.title.trim()?{classification:classifyProductTitle(receipt.title)}:{})};
 }
 export async function withShortLock(root,doWork,{timeoutMs=12000,recoveryOptions={}}={}){
  const dir=join(root,'data','.captures-write-lock');
@@ -90,6 +94,9 @@ export async function updateProduct(root,patch,{allowSuccessDowngrade=false}={})
   if(old?.skuId&&patch.skuId&&old.skuId!==patch.skuId)
    throw Error('Existing SKU conflicts with the supplied SKU for product '+id);
   const next={...old,...patch,productId:id};
+  // A manual product classification is authoritative across capture/recovery updates.
+  if(old?.classification?.manualLocked&&patch.classification?.source!=='manual')
+    next.classification=old.classification;
   if(old?.skuId&&!next.skuId)next.skuId=old.skuId;
   if(old?.outputDir&&!next.outputDir)next.outputDir=old.outputDir;
   if(old?.url&&!patch.url)next.url=old.url;
@@ -107,6 +114,26 @@ export async function updateProduct(root,patch,{allowSuccessDowngrade=false}={})
   return next;
  });
 }
+// Only touch the classification field; old Taobao records must retain their original URLs.
+// Never route a classification-only backfill through canonicalProductUrl validation.
+export async function updateProductClassification(root,id,classification){
+  if(!/^\d{8,16}$/.test(id||'')||!classification||typeof classification!=='object')
+    throw Error('Invalid product classification patch');
+  return withShortLock(root,()=>{
+    const data=readRegistry(root),old=data.products[id];
+    if(!old)throw Error('Classification target not registered: '+id);
+    if(old.classification?.manualLocked&&classification.source!=='manual')return old;
+    const next={...old,classification},file=registryPath(root);
+    data.products[id]=next;
+    const tmp=file+'.industry-'+process.pid+'-'+randomUUID()+'.tmp';
+    try{
+      writeFileSync(tmp,JSON.stringify(data,null,2)+'\n',{flag:'wx'});
+      renameSync(tmp,file);
+    }catch(err){if(existsSync(tmp))rmSync(tmp,{force:true});throw err}
+    return next;
+  });
+}
+
 export function acquireProductLock(root,id,{recoveryOptions={}}={}){
  if(!/^\d{8,16}$/.test(id))throw Error('Invalid product ID');
  const dir=join(root,'data','locks','product-'+id+'.lock');

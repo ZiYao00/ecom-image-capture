@@ -65,7 +65,8 @@ test('classifies only actual verified items, readback confirms all, and re-runni
   const a = await archive({rpc:m.rpc,productId:id,images,rootName});
   assert.equal(a.status, 'complete');
   assert.deepEqual(a.classified,{main:1,detail:2});
-  assert.equal(m.state.roots[0].children[0].children.length,2);
+  assert.equal(m.state.roots[0].children[0].name,'待分类');
+   assert.equal(m.state.roots[0].children[0].children[0].children.length,2);
   const count = m.state.calls.filter(x=>x.name==='folder_create'||x.name==='item_add_to_folders').length;
   const again = await archive({rpc:m.rpc,productId:id,images,rootName});
   assert.equal(again.status,'complete');
@@ -93,6 +94,18 @@ test('blocks duplicate expected names, unsafe product ID and unexpected category
   await assert.rejects(()=>archive({rpc:m.rpc,productId:'../foo',images:[im],rootName}),/Invalid product/);
   await assert.rejects(()=>archive({rpc:m.rpc,productId:id,images:[{...im,category:'other'}],rootName}),/category/);
 });
+test('shared Eagle original is classified under a new product without renaming or adding files',async()=>{
+ const m=mockEagle();
+ const foreign=m.add('Tmall-947780804552-detail-022','detail');
+ const intended={...foreign,name:'Tmall-'+id+'-detail-001',order:1,
+  eagleName:foreign.name,resolution:'reused',sha256:'a'.repeat(64)};
+ const result=await archive({rpc:m.rpc,productId:id,images:[intended],rootName});
+ assert.equal(result.status,'complete');
+ assert.equal(result.classified.detail,1);
+ assert.equal(m.state.items.get(foreign.itemId).name,foreign.name);
+ assert.equal(m.state.calls.filter(x=>x.name==='item_add').length,0);
+});
+
 test('refuses ambiguous existing folder names before calling folder_create',async()=>{
   const m=mockEagle(),images=[m.add('Tmall-'+id+'-main-001','main')];
   m.state.roots.push({id:'F1',name:rootName,children:[]},{id:'F2',name:rootName,children:[]});
