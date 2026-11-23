@@ -12,10 +12,23 @@ import { reconcileEagleItems } from './eagle-reconcile.mjs';
 import {repairCopyState} from './recovery-core.mjs';
 import {captureSummary,updateProduct,readRegistry,acquireProductLock} from './capture-store.mjs';
 import {resolveOutputRoot} from './capture-policy.mjs';
-import {verifyEagleReadback} from './eagle-readback.mjs';
 import {generateDetailPreview} from './html-preview.mjs';
-import {archiveEagleProduct, archiveRootForDate, eagleArchiveRpc} from './eagle-archive.mjs';
+import {archiveEagleProduct, ensureEagleProductFolders, ECOM_ARCHIVE_ROOT, eagleArchiveRpc} from './eagle-archive.mjs';
 import {storageModeFromConfig, eagleOnlyReceiptState} from './storage-mode.mjs';
+import {stitchEagleProduct} from './stitch-eagle-core.mjs';
+import {importEagleInBatches} from './eagle-batch.mjs';
+import {evaluateInNavigatedTab} from './chrome-navigation.mjs';
+import {sourceCandidates} from './eagle-source-index.mjs';
+import {resolveReusedSlots,associateConfirmedReuse} from './eagle-reuse-resolution.mjs';
+import {listFolderItems,hashEagleFile,readCurrentEagleProduct} from './eagle-current.mjs';
+import {makeMap,saveMap} from './eagle-product-map.mjs';
+import {mirrorEagleMap} from './eagle-map-mirror.mjs';
+import {processV3ImportedImages,eagleV2GetById} from './v3-eagle-import.mjs';
+import {visibleEagleItemCount,syncV3StitchPartsToIndex} from './v3-fingerprint.mjs';
+import {createV3ReadbackRpc} from './v3-web-readback.mjs';
+import {syncIndustryAfterProductComplete} from './industry-eagle.mjs';
+import {classifyProductTitle,isConfidentClassification} from './industry-core.mjs';
+import {assertIndustryMigrationNotActive} from './eagle-industry-move.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -149,18 +162,21 @@ if (args[0] === '--copy-only') {
 }
 const dryRun = args[0] === '--dry-run';
 const resumeExisting = args[0] === '--resume-existing';
+const v3Capture = args[0] === '--v3';
+if(v3Capture&&config.v3Experimental!==true)
+  throw Error('V3.1 experimental capture is disabled by default; set v3Experimental=true only for an authorized trial');
 if (resumeExisting && !/^[0-9]{8,16}$/.test(args[1] || ''))
   throw Error('Resume requires a product ID');
-if((dryRun&&args.length!==2)||(resumeExisting&&args.length>3)||(!dryRun&&!resumeExisting&&args.length>2))
+if((dryRun&&args.length!==2)||(resumeExisting&&args.length>3)||(v3Capture&&(args.length<2||args.length>3))||(!dryRun&&!resumeExisting&&!v3Capture&&args.length>2))
   throw Error('Unexpected arguments; use --help');
-const url = new URL(resumeExisting ? 'https://detail.tmall.com/item.htm?id=' + args[1] : (dryRun ? args[1] : args[0]));
+const url = new URL(resumeExisting ? 'https://detail.tmall.com/item.htm?id=' + args[1] : ((dryRun||v3Capture) ? args[1] : args[0]));
 const productId = url.searchParams.get('id');
 if (url.protocol !== 'https:' || url.hostname !== 'detail.tmall.com' ||
     url.pathname !== '/item.htm' || !/^[0-9]{8,16}$/.test(productId || ''))
   throw Error('Only a valid detail.tmall.com/item.htm product URL is accepted');
-if(!dryRun)acquireProductLock(root,productId);
+if(!dryRun){assertIndustryMigrationNotActive(root);acquireProductLock(root,productId);}
 const indexedBefore=readRegistry(root).products[productId];
-const explicitRoot=resumeExisting?(args[2]||(indexedBefore?.outputDir?dirname(indexedBefore.outputDir):null)):args[1];
+const explicitRoot=resumeExisting?(args[2]||(indexedBefore?.outputDir?dirname(indexedBefore.outputDir):null)):(v3Capture?args[2]:args[1]);
 const destRoot=dryRun?null:resolveOutputRoot(root,explicitRoot,config.outputRoot);
 if(!dryRun && indexedBefore?.status==='success')throw Error('Already completed in captures.json; do not duplicate Eagle import');
 if(!dryRun&&indexedBefore?.outputDir&&resolve(indexedBefore.outputDir)!==resolve(destRoot,productId))
@@ -186,8 +202,10 @@ const receipt = resumeExisting ? {
   ...previous, skuId, phase:'resuming_existing_page', images:[],errors:[],copied:0
 } : {
   productId, skuId, phase:'started', eagle:'not_called', images:[],
+  ...(v3Capture?{captureVersion:'v3.1-experimental'}:{}),
   timings:{}, errors:[], copied:0
 };
+receipt.autoStitchEnabled = config.autoStitch !== false;
 if (resumeExisting) delete receipt.debug;
 const save = () => {if(!dryRun)receiptSave(receiptPath, receipt)};
 const mark = label => {receipt.timings[label] = ms();save();};
@@ -229,6 +247,10 @@ function scanProduct() {
     const detailAnySel = '#imageTextInfo-content img, [class*="descV8"] img, #J_DivItemDesc img';
     const cdnPattern = /^https?:\/\/(?:[a-z0-9-]+\.)*(?:alicdn\.com|taobaocdn\.com|tbcdn\.cn)\//i;
     const platformPattern = /!!600000000\d+|\/600000000\d+\//;
+    // Valid external certification images are informational, not Tmall merchant CDN assets.
+    const certificatePattern = /^https:\/\/oss\.gds\.org\.cn\/userfile2\/Product\/Voucher\/Images\//i;
+    const isCertificationImage = el => [el.currentSrc,el.getAttribute('src'),el.src]
+      .filter(Boolean).some(x=>certificatePattern.test(x));
     const imgUrl = el => {
       const srcset = el.getAttribute('srcset') || '';
       const candidates = [
@@ -321,7 +343,7 @@ function scanProduct() {
       const height=detailRegion()?.scrollHeight||document.scrollingElement?.scrollHeight||document.documentElement.scrollHeight;
       const sig=signature(now);
       const ready=countReady(now);
-      const pending=now.map((el,i)=>!imgUrl(el)?i:null).filter(x=>x!==null);
+      const pending=now.map((el,i)=>!imgUrl(el)&&!isCertificationImage(el)?i:null).filter(x=>x!==null);
       if(now.length>position){position=Math.min(position,now.length-1);stable=0;continue;}
       if(sig===lastSig && height===lastHeight && pending.length===0 && ready>0)stable++;
       else stable=0;
@@ -337,7 +359,8 @@ function scanProduct() {
     }
     const main=mainEls().map(el=>({url:imgUrl(el),width:el.naturalWidth,height:el.naturalHeight}));
     const detail=detailEls().map(el=>({url:imgUrl(el),width:el.naturalWidth,height:el.naturalHeight}));
-    for(let i=0;i<detail.length;i++)if(!detail[i].url)unresolvedImageIndices.push(i+1);
+    const finalDetailEls=detailEls();
+    for(let i=0;i<detail.length;i++)if(!detail[i].url&&!isCertificationImage(finalDetailEls[i]))unresolvedImageIndices.push(i+1);
     const platformDetail=detail.filter(d=>platformPattern.test(d.url)).length;
     const merchantDetail=detail.filter(d=>isMerchantUrl(d.url)).length;
     const debug=merchantDetail>0 && unresolvedImageIndices.length===0 ? null : {
@@ -356,7 +379,7 @@ function scanProduct() {
       captcha:!!document.querySelector('[id*="captcha"],iframe[src*="captcha"],[class*="captcha"]'),
       main,detail,metrics:{
         scanMs:totalTime(),scrollMoves,detailNodes:detail.length,
-        merchantDetail,platformDetail,unresolvedImageIndices,
+        merchantDetail,platformDetail,excludedCertification:finalDetailEls.filter(isCertificationImage).length,unresolvedImageIndices,
         stableAtTail:stable>=2,peakNodes,peakReady
       },debug
     };
@@ -396,7 +419,10 @@ try {
     if(!match)throw Error('Cannot identify newly opened Chrome page; do not close unknown tab');
     ownPage=Number(match[1]);mark('pageOpened');
   }
-  page=parseObject(await chrome('evaluate_script',{pageId:ownPage,function:scanProduct.toString()},150000));
+  page=parseObject(await evaluateInNavigatedTab(
+    ()=>chrome('evaluate_script',{pageId:ownPage,function:scanProduct.toString()},150000),
+    {onRetry:attempt=>{receipt.navigationRaceRetries=attempt;save();}}
+   ));
   mark('pageScanned');
   receipt.title=page.title;
   receipt.scan=page.metrics;
@@ -442,6 +468,12 @@ if(dryRun){
     scan:receipt.scan,eagle:'not_called',receiptModified:false,totalMs:ms()},null,2));
   process.exit(0);
 }
+assertIndustryMigrationNotActive(root);
+const effectiveIndustryClassification=indexedBefore?.classification?.manualLocked
+  ?indexedBefore.classification:classifyProductTitle(receipt.title);
+const effectiveIndustryCode=isConfidentClassification(effectiveIndustryClassification)
+  ?effectiveIndustryClassification.industryCode:null;
+let v3ReadbackRpc=null;
 const canonical='https://detail.tmall.com/item.htm?id='+productId+(skuId?'&skuId='+skuId:'');
 async function eagleRpc(name, params={}, limit=30000){
   const response=await fetch(eagleUrl,{
@@ -460,36 +492,102 @@ async function eagleRpc(name, params={}, limit=30000){
 }
 try {
   // This is a non-idempotent operation. Persist "may have submitted" BEFORE the call.
+  if(v3Capture){
+    receipt.phase='v3_prefetch_and_import';
+    const indexPath=join(root,'data','fingerprints','v3-eagle.sqlite');
+    if(!existsSync(indexPath))throw Error('V3 fingerprint index missing; run v3-index --build');
+    const app=await eagleRpc('get_app_info',{},45000);
+    if(!app?.libraryPath)throw Error('Active Eagle library path missing');
+    const folders=await ensureEagleProductFolders({
+      rpc:(name,params)=>eagleRpc(name,params,45000),productId,
+      rootName:config.eagleArchiveRootName||ECOM_ARCHIVE_ROOT,
+      industryCode:effectiveIndustryCode,apply:true});
+    receipt.folderIds=folders;save();
+    const imported=await processV3ImportedImages({
+      root,productId,url:canonical,images:receipt.images,libraryPath:app.libraryPath,
+      folderIds:folders,indexPath,
+      linkFolders:(ids,fids)=>eagleRpc('item_add_to_folders',{ids,folders:fids},60000),
+      checkLibrary:async()=>visibleEagleItemCount()
+    });
+    receipt.images=imported.images;
+    receipt.eagle='verified';
+    receipt.eagleBatches=[];
+    receipt.v3Job={status:imported.status,verified:imported.images.length};
+    v3ReadbackRpc=createV3ReadbackRpc({eagleMcpUrl:eagleUrl,libraryPath:app.libraryPath});
+    mark('eagleReadback');
+  }else{
   receipt.phase='eagle_outcome_uncertain';
   receipt.eagle='may_have_submitted';
   mark('beforeEagleSubmit');
   await updateProduct(root,captureSummary(receipt,{url:canonical,outputDir:resolve(destRoot,productId)}));
-  const items=receipt.images.map(x=>({source:{type:'url',url:x.url,website:canonical},name:x.name}));
-  const results=await eagleRpc('item_add',{items},180000);
-  const added=Array.isArray(results)?results:(results.items||[]);
-  // Save only the returned IDs before querying full details. Never associate by array index.
-  const ids=[...new Set(added.map(x=>x?.itemId||x?.id).filter(Boolean))];
-  receipt.eagleReturnedItemIds=ids;
-  mark('eagleSubmitted');
-  const matched=await verifyEagleReadback(receipt.images,added,
-    async itemIds=>eagleRpc('item_get',{ids:itemIds,fullDetails:true},60000));
-  receipt.eagleReadbackAttempts=matched.attempts;
-  receipt.images=matched.records;
-  // Eagle can acknowledge an itemId while leaving a non-existent .info file.
-  // Verify physical material, not just index metadata, before accepting success.
-  const invalidFiles=[];
-  for(const record of receipt.images.filter(x=>x.verified)){
-    let material=false;
-    try{const s=statSync(record.filePath);material=s.isFile()&&s.size>0}catch{}
-    if(!material){
-      record.verified=false;
-      record.materialStatus='missing_physical_file';
-      invalidFiles.push('Eagle material missing: '+record.name);
+  // Journal each small batch before calling Eagle's non-idempotent item_add.
+  receipt.eagleBatches=[];
+  const sourceIndex=sourceCandidates(root,{excludeProductId:productId});
+  const archiveRoot=config.eagleArchiveRootName||ECOM_ARCHIVE_ROOT;
+  const scopedRpc=(name,params)=>eagleRpc(name,params,45000);
+  const folders=await ensureEagleProductFolders({rpc:scopedRpc,productId,
+    rootName:archiveRoot,industryCode:effectiveIndustryCode,apply:true});
+  if(!folders)throw Error('Cannot verify Eagle category folders before import');
+  receipt.folderIds=folders;save();
+  const planned=receipt.images.map(x=>({...x,website:canonical}));
+  const batchResult=await importEagleInBatches(planned,{
+    add:items=>eagleRpc('item_add',{items},180000),
+    read:ids=>eagleRpc('item_get',{ids,fullDetails:true},60000),
+    exists:path=>{try{const s=statSync(path);return s.isFile()&&s.size>0}catch{return false}},
+    batchSize:8,folderIds:folders,
+    resolveReused:async ({group,submitted,records,unverified,batchIndex})=>{
+      if(!unverified.length){
+        for(const x of records.filter(x=>x.verified)){
+          const ids=sourceIndex.get(x.url)||[];
+          if(x.itemId&&!ids.includes(x.itemId))sourceIndex.set(x.url,[...ids,x.itemId]);
+        }
+        return {resolved:[],unresolved:[]};
+      }
+      const [main,detail]=await Promise.all([
+        listFolderItems(scopedRpc,folders.main),listFolderItems(scopedRpc,folders.detail)
+      ]);
+      const candidates=[...main.filter(x=>x.folders?.includes(folders.main)).map(x=>({...x,category:'main'})),
+        ...detail.filter(x=>x.folders?.includes(folders.detail)).map(x=>({...x,category:'detail'}))];
+      const resolved=await resolveReusedSlots({missing:unverified,candidates,
+        knownSources:sourceIndex,inspect:hashEagleFile});
+      const hard=new Set(resolved.unresolved.filter(x=>
+        ['fallback_hash_mismatch','fallback_metadata_invalid','ambiguous_shared_items'].includes(x.reason))
+        .map(x=>x.name));
+      const remaining=unverified.filter(x=>
+        resolved.unresolved.some(r=>r.name===x.name)&&!hard.has(x.name));
+      const linked=remaining.length?await associateConfirmedReuse({
+        missing:remaining,submitted,knownSources:sourceIndex,folderIds:folders,
+        readByIds:ids=>eagleRpc('item_get',{ids,fullDetails:true},60000),
+        inspect:hashEagleFile,
+        linkToFolder:(ids,folderIds)=>eagleRpc('item_add_to_folders',{ids,folders:folderIds},60000),
+        journal:async step=>{
+          const batch=receipt.eagleBatches[batchIndex-1];
+          batch.associations=[...(batch.associations||[]).filter(x=>x.name!==step.name),step];
+          save();
+        }
+      }):{resolved:[],unresolved:[]};
+      resolved.resolved.push(...linked.resolved);
+      resolved.unresolved=[...resolved.unresolved.filter(x=>
+        hard.has(x.name)),...linked.unresolved];
+      for(const x of [...records.filter(x=>x.verified),...resolved.resolved]){
+        const known=sourceIndex.get(x.url)||[];
+        if(x.itemId&&!known.includes(x.itemId))sourceIndex.set(x.url,[...known,x.itemId]);
+      }
+      return resolved;
+    },
+    record:async batch=>{
+      receipt.eagleBatches[batch.index-1]=batch;
+      receipt.eagleReturnedItemIds=[...new Set(receipt.eagleBatches.flatMap(x=>x?.ids||[]))];
+      save();
     }
-  }
-  receipt.errors.push(...matched.issues.map(x=>'Eagle mapping: '+x),...invalidFiles);
+  });
+  receipt.eagleReadbackAttempts=batchResult.readbackAttempts;
+  receipt.images=batchResult.records;
+  receipt.errors.push(...batchResult.issues);
   mark('eagleReadback');
-  receipt.eagle=receipt.images.every(x=>x.verified)&&!matched.issues.length&&!invalidFiles.length?'verified':'partially_verified';
+  receipt.eagle=receipt.images.length===selection.length&&receipt.images.every(x=>x.verified)&&
+    !batchResult.issues.length?'verified':'partially_verified';
+  } // Legacy V2 import remains the default.
 }catch(e){
   receipt.errors.push('Eagle: '+String(e?.message||e));
   receipt.eagle='uncertain_no_retry';
@@ -514,25 +612,111 @@ if(storageMode==='copy'){
 // Classification is an independent, readback-verified stage. Never repeat item_add.
 try {
   receipt.archive = await archiveEagleProduct({
-    rpc: (name, params) => eagleArchiveRpc(eagleUrl, name, params),
+    rpc: (name, params) => v3ReadbackRpc ? v3ReadbackRpc(name,params) : eagleArchiveRpc(eagleUrl, name, params),
     productId, images: receipt.images,
-    rootName: config.eagleArchiveRootName || archiveRootForDate(), apply: true
+    rootName: config.eagleArchiveRootName || ECOM_ARCHIVE_ROOT,
+    industryCode:effectiveIndustryCode,apply: true
   });
 } catch (error) {
-  receipt.archive = {status:'needs_read_only_review', rootName:config.eagleArchiveRootName || archiveRootForDate(),
+  receipt.archive = {status:'needs_read_only_review', rootName:config.eagleArchiveRootName || ECOM_ARCHIVE_ROOT,
     error:String(error?.message||error)};
 }
 receipt.totalMs=ms();
 save();
+// Persist a per-library product-position map, then mirror only a COMPLETE map
+// to Eagle folder descriptions. Never infer success from item_add IDs alone.
+try{
+  const checkedIds=[...new Set(receipt.images.filter(x=>x.verified&&x.itemId).map(x=>x.itemId))];
+  const actual=new Map();
+  for(let i=0;i<checkedIds.length;i+=100){
+    const response=await (v3ReadbackRpc ? v3ReadbackRpc('item_get',{ids:checkedIds.slice(i,i+100),fullDetails:true}) : eagleRpc('item_get',{ids:checkedIds.slice(i,i+100),fullDetails:true},60000));
+    for(const item of (Array.isArray(response)?response:response.items||[]))actual.set(item.id,item);
+  }
+  const cache=new Map();
+  for(const image of receipt.images){
+    if(!image.verified||!image.itemId)continue;
+    const item=actual.get(image.itemId),fid=receipt.folderIds?.[image.category];
+    if(!item||!item.folders?.includes(fid)||item.isDeleted===true){
+      image.verified=false;continue;
+    }
+    if(!cache.has(item.id))cache.set(item.id,await hashEagleFile(item));
+    const proof=cache.get(item.id);
+    if(image.resolution==='reused'&&image.eagleName!==item.name)
+      throw Error('Eagle reused item changed its global name');
+    image.sha256=proof.sha256;
+    image.filePath=proof.filePath;
+    image.eagleName=item.name;
+  }
+  const appInfo=await eagleRpc('get_app_info',{},45000);
+  const mapping=makeMap(productId,receipt.images,{libraryPath:appInfo.libraryPath||null,
+    folders:{main:receipt.folderIds.main,detail:receipt.folderIds.detail}});
+  const independent=await readCurrentEagleProduct({
+    rpc:(name,params)=>v3ReadbackRpc ? v3ReadbackRpc(name,params) : eagleRpc(name,params,60000),
+    productId,images:receipt.images,rootName:receipt.archive?.rootName||config.eagleArchiveRootName||ECOM_ARCHIVE_ROOT,
+    productMap:mapping
+  });
+  if(independent.status!==mapping.status||independent.invalid.length)
+    throw Error('Product mapping conflicts with independent Eagle verification');
+  const saved=saveMap(root,mapping);
+  receipt.productMap={status:mapping.status,path:saved.path,sourceMode:'product_map'};
+  if(mapping.status==='complete'&&receipt.archive?.status==='complete'){
+    const mirror=await mirrorEagleMap({
+      rpc:(name,params)=>v3ReadbackRpc ? v3ReadbackRpc(name,params) : eagleRpc(name,params,60000),map:mapping,apply:true});
+    receipt.productMap.mirrorStatus=mirror.status;
+  }else receipt.productMap.mirrorStatus='blocked_incomplete';
+}catch(e){
+  receipt.productMap={status:'needs_read_only_review',error:String(e.message||e)};
+  receipt.errors.push('Product mapping: '+String(e.message||e));
+}
+save();
+// Automatically stitch only after source files and Eagle classification are complete.
+if(receipt.autoStitchEnabled){
+  if(receipt.archive?.status==='complete' && receipt.eagle==='verified'){
+    if(!process.env.STITCH_FFMPEG&&config.ffmpegExecutablePath)
+      process.env.STITCH_FFMPEG=config.ffmpegExecutablePath;
+    if(!process.env.STITCH_FFPROBE&&config.ffprobeExecutablePath)
+      process.env.STITCH_FFPROBE=config.ffprobeExecutablePath;
+    try{
+      receipt.postprocess={...receipt.postprocess,stitch:await stitchEagleProduct({
+        rpc:(name,params)=>v3ReadbackRpc ? v3ReadbackRpc(name,params) : eagleArchiveRpc(eagleUrl,name,params,name==='item_add'?90000:45000),
+        productId,images:receipt.images,rootName:receipt.archive.rootName,width:750,apply:true,
+        outputRoot:join(root,'data','stitch-eagle')
+      })};
+      if(v3Capture&&receipt.postprocess.stitch?.status==='complete'){
+        try{
+          const currentApp=await eagleRpc('get_app_info',{});
+          receipt.postprocess.indexSync=await syncV3StitchPartsToIndex({
+            indexPath:join(root,'data','fingerprints','v3-eagle.sqlite'),
+            libraryPath:currentApp.libraryPath,parts:receipt.postprocess.stitch.parts,
+            getById:eagleV2GetById,getLiveCount:visibleEagleItemCount
+          });
+        }catch(indexError){
+          receipt.postprocess.indexSync={status:'needs_read_only_review',
+            error:String(indexError.message||indexError)};
+        }
+      }
+    }catch(e){
+      receipt.postprocess={...receipt.postprocess,stitch:{status:'needs_read_only_review',error:String(e.message||e)}};
+    }
+  }else receipt.postprocess={...receipt.postprocess,stitch:{status:'blocked_incomplete_eagle_sources'}};
+}
+receipt.totalMs=ms();save();
 await updateProduct(root,captureSummary(receipt,{url:canonical,outputDir:copies.destination}));
 console.log(JSON.stringify({
-  status:receipt.phase,workflowStatus:receipt.phase==='success'&&receipt.archive?.status==='complete'?'complete':'incomplete',productId,title:receipt.title,
+  industrySync:await syncIndustryAfterProductComplete(root,productId),
+  status:receipt.phase,workflowStatus:receipt.phase==='success'&&receipt.archive?.status==='complete'&&
+    (!receipt.autoStitchEnabled||['complete','already_complete'].includes(receipt.postprocess?.stitch?.status))&&
+     (!receipt.productMap||receipt.productMap.status==='complete'&&receipt.productMap.mirrorStatus==='complete')?'complete':'incomplete',productId,title:receipt.title,
   main:receipt.selected.main,detail:receipt.selected.detail,
   submitted:selection.length,verified:receipt.images.filter(x=>x.verified).length,
   copied:copies.copied,destination:copies.destination,totalMs:ms(),
   eagleReadbackAttempts:receipt.eagleReadbackAttempts||0,
   html:receipt.postprocess?.html||{status:'skipped'},
+  stitch:receipt.postprocess?.stitch||{status:'skipped'},
   archive:receipt.archive,
+  productMap:receipt.productMap||{status:'legacy'},
   timings:receipt.timings,errors:receipt.errors
 },null,2));
-if(receipt.phase!=='success'||receipt.archive?.status!=='complete')process.exitCode=2;
+if(receipt.phase!=='success'||receipt.archive?.status!=='complete'||
+  (receipt.autoStitchEnabled&&!['complete','already_complete'].includes(receipt.postprocess?.stitch?.status))||
+  (receipt.productMap&&!(receipt.productMap.status==='complete'&&receipt.productMap.mirrorStatus==='complete')))process.exitCode=2;

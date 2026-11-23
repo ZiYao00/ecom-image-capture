@@ -1,7 +1,10 @@
 // Eagle classification is a separate, readback-verified stage after item_add.
 import {statSync} from 'node:fs';
+import {locateEagleProductFolder,industryFolderName,isEcomRootName} from './eagle-folder-layout.mjs';
 const physicalFileExists=path=>{try{const s=statSync(path);return s.isFile()&&s.size>0}catch{return false}};
 // This module NEVER calls item_add and NEVER deletes or moves existing items.
+export const ECOM_ARCHIVE_ROOT = '电商平台批量采集';
+export const isSupportedArchiveRoot = isEcomRootName;
 export function archiveRootForDate(date = new Date()) {
   const pad = n => String(n).padStart(2, '0');
   return '天猫批量采集_' + [date.getFullYear(), pad(date.getMonth() + 1), pad(date.getDate())].join('-');
@@ -67,6 +70,37 @@ async function resolveFolder({rpc, name, parentId, apply}) {
   return {id: result.id, name, created: true};
 }
 
+export async function ensureEagleProductFolders({rpc,productId,rootName=ECOM_ARCHIVE_ROOT,
+  apply=true,industryCode=null}){
+ if(!/^\d{8,16}$/.test(String(productId))||!isSupportedArchiveRoot(rootName))
+  throw Error('Unsafe Eagle product folder request');
+ const roots=asArray(await rpc('folder_get',{getAllHierarchy:true,fullDetails:true}));
+ const existing=locateEagleProductFolder(roots,productId);
+ if(existing&&existing.rootName!==rootName)
+   throw Error('Existing Eagle product is in another archive root; resolve before creating: '+productId);
+ if(existing){
+   const expected=industryFolderName(industryCode);
+   if(industryCode&&existing.industryName&&existing.industryName!==expected)
+     throw Error('Existing Eagle product industry differs; migrate the folder before import: '+productId);
+   const main=await resolveFolder({rpc,name:'主图',parentId:existing.productFolderId,apply});
+   const detail=await resolveFolder({rpc,name:'详情页',parentId:existing.productFolderId,apply});
+   if(!main||!detail)return null;
+   return {root:existing.rootId,industry:existing.parentId===existing.rootId?null:existing.parentId,
+     industryCode:existing.industryCode,product:existing.productFolderId,main:main.id,detail:detail.id};
+ }
+ const root=await resolveFolder({rpc,name:rootName,parentId:null,apply});
+ if(!root)return null;
+ const industry=await resolveFolder({rpc,name:industryFolderName(industryCode),
+   parentId:root.id,apply});
+ if(!industry)return null;
+ const product=await resolveFolder({rpc,name:String(productId),parentId:industry.id,apply});
+ if(!product)return null;
+ const main=await resolveFolder({rpc,name:'主图',parentId:product.id,apply});
+ const detail=await resolveFolder({rpc,name:'详情页',parentId:product.id,apply});
+ if(!main||!detail)return null;
+ return {root:root.id,industry:industry.id,industryCode:industryCode||null,
+   product:product.id,main:main.id,detail:detail.id};
+}
 function namesByCategory(images) {
   const seen = new Set();
   for (const im of images) {
@@ -76,10 +110,11 @@ function namesByCategory(images) {
   }
 }
 
-export async function archiveEagleProduct({rpc, productId, images, rootName = archiveRootForDate(), apply = true, fileExists = physicalFileExists}) {
+export async function archiveEagleProduct({rpc, productId, images, rootName = ECOM_ARCHIVE_ROOT, apply = true,
+  industryCode=null,fileExists = physicalFileExists}) {
   if (!/^\d{8,16}$/.test(String(productId))) throw Error('Invalid product ID');
   if (!Array.isArray(images) || !images.length) throw Error('No capture images to archive');
-  if (!/^天猫批量采集_\d{4}-\d{2}-\d{2}$/.test(rootName)) throw Error('Unsafe/unknown Eagle batch root name');
+  if (!isSupportedArchiveRoot(rootName)) throw Error('Unsafe/unknown Eagle batch root name');
   namesByCategory(images);
   const verified = images.filter(im => im.verified === true && im.itemId);
   const result = {
@@ -103,7 +138,9 @@ export async function archiveEagleProduct({rpc, productId, images, rootName = ar
   const accepted = {main: [], detail: []};
   for (const im of verified) {
     const actual = actualById.get(im.itemId);
-    if (!actual || actual.name !== im.name || !actual.filePath || !fileExists(actual.filePath) ||
+    if (!actual || !(actual.name===im.name || (im.resolution==='reused' &&
+         actual.name===im.eagleName && /^[a-f0-9]{64}$/.test(im.sha256||''))) ||
+         !actual.filePath || !fileExists(actual.filePath) ||
         !(actual.width > 0) || !(actual.height > 0) || actual.isDeleted === true) {
       missing.add(im.name);
       continue;
@@ -117,23 +154,11 @@ export async function archiveEagleProduct({rpc, productId, images, rootName = ar
     result.status = 'no_verified_eagle_items';
     return result;
   }
-  const root = await resolveFolder({rpc, name: rootName, parentId: null, apply});
-  if (!root) {
+  const folderIds = await ensureEagleProductFolders({rpc,productId,rootName,industryCode,apply});
+  if (!folderIds) {
     result.status = 'folders_missing';
     return result;
   }
-  const product = await resolveFolder({rpc, name: String(productId), parentId: root.id, apply});
-  if (!product) {
-    result.status = 'folders_missing';
-    return result;
-  }
-  const main = await resolveFolder({rpc, name: '主图', parentId: product.id, apply});
-  const detail = await resolveFolder({rpc, name: '详情页', parentId: product.id, apply});
-  if (!main || !detail) {
-    result.status = 'folders_missing';
-    return result;
-  }
-  const folderIds = {root: root.id, product: product.id, main: main.id, detail: detail.id};
   result.folderIds = folderIds;
   for (const category of ['main', 'detail']) {
     const items = accepted[category];
@@ -154,7 +179,8 @@ export async function archiveEagleProduct({rpc, productId, images, rootName = ar
   for (const category of ['main', 'detail']) {
     for (const im of accepted[category]) {
       const now = checked.get(im.id || im.itemId);
-      if (now?.name === im.name && fileExists(now.filePath) && (now.folders || []).includes(folderIds[category]))
+      if ((now?.name===im.name || (im.resolution==='reused'&&now?.name===im.eagleName)) &&
+           fileExists(now.filePath) && (now.folders || []).includes(folderIds[category]))
         result.classified[category]++;
     }
   }

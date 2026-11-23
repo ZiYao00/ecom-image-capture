@@ -24,7 +24,16 @@ export const publicScripts = [
  'stitch-core.mjs','stitch-detail.mjs','public-files.mjs','audit-public.mjs',
  'browser-port.mjs','ecom.mjs','archive-product.mjs',
   'eagle-archive.mjs','storage-mode.mjs','build-eagle-plugin.mjs',
-  'eagle-current.mjs','stitch-eagle-core.mjs','stitch-eagle.mjs'
+  'eagle-current.mjs','stitch-eagle-core.mjs','stitch-eagle.mjs',
+   'eagle-migration-core.mjs','migrate-eagle-folders.mjs',
+   'recover-eagle-local.mjs','eagle-batch.mjs',
+    'batch-core.mjs','batch-capture.mjs','verify-live-product.mjs',
+    'eagle-duplicate-core.mjs','recover-duplicates.mjs','chrome-navigation.mjs',
+     'eagle-product-map.mjs','eagle-source-index.mjs','eagle-reuse-resolution.mjs','eagle-map-mirror.mjs','map-eagle-product.mjs','reconcile-reused.mjs',
+      'v3-fingerprint.mjs','v3-index.mjs','v3-prefetch.mjs','v3-verify-prefetch.mjs',
+      'v3-job-state.mjs','v3-eagle-import.mjs','v3-web-readback.mjs','v3-resume-no-write.mjs',
+       'industry-core.mjs','industry-eagle.mjs','industry-cli.mjs',
+        'eagle-folder-layout.mjs','eagle-industry-move.mjs','industry-folder-cli.mjs'
 ];
 export function publicFiles(root){
  const scripts=publicScripts.map(x=>'scripts/'+x);

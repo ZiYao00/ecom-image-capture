@@ -8,14 +8,30 @@
 1. **Agent 首选** `node scripts/ecom.mjs setup`：安装项目内 Chrome MCP、初始化目录和配置、启动独立浏览器并验证 Eagle；不需外部 Agent 工程。命令返回 JSON `status` / `nextActions` 和退出码。只有 Node 未安装或明确需要系统依赖检测时，才从 `install.ps1 -CheckOnly` 开始；系统软件安装必须另获授权后显式使用 `-InstallSystemDependencies`。受限 Agent 宿主不必强制经 PowerShell 进程包装层。缺少 Eagle 插件或网站登录时准确反馈，OCR/FFmpeg 缺失不阻断采集。
 2. `ecom.mjs setup` 会幂等调用原 `setup.mjs`，不覆盖已有商品索引和本机配置，也不需要额外重复执行初始化命令。
 3. 传入**用户的完整原始天猫 URL**，执行 `node scripts/ecom.mjs capture "<完整URL>" ["<根目录>"]` 或 `.\ecom.cmd capture ...`。CLI 负责浏览器准备、MCP 预检和一次正式采集；禁止删掉 URL 参数，禁止失败后自动重提 Eagle。
-4. 默认 `storageMode: copy` 本地输出到 `output/`；用户显式路径优先。`storageMode: eagle` 时不复制本地图片，但仍保存索引与回执；按需 `ecom export <商品ID>`。旧商品输出路径保持不变，不移动或重采。
-5. Eagle `item_add` 是图片主采集手段，`item_get` 由脚本自动有限次重查。**Eagle 的「重复添加提示」可能让导入等待选择，即使 MCP 返回成功也未落盘**；必须核对物理文件，不得对不确定的批次自动重发 `item_add`。
-6. 直连下载仅限 `recover-direct.mjs` 中的受控例外，**必须 Eagle 已部分验证且同一商品累计不超过 10 张**。不经过 Eagle 查重、Eagle 离线或超过上限时禁止执行。
-7. 新商品采集必须自动创建/复用 Eagle 的 `天猫批量采集_YYYY-MM-DD/<ID>/主图|详情页`，分类用已有 itemId 建立文件夹关联并回读；不重发 `item_add`。`receipt.archive.status` 必须单独报告，缺图或分类不完整不得报整体完成。
-8. `copy` 模式生成 `main/`、`detail/` 和 `detail/HTML.html`；`eagle` 模式直接通过 Eagle 窗口插件预览，不创建重复素材。OCR 只按需执行；授权长图拼接时首选 `ecom stitch-eagle <商品ID> [宽度] [--check]`，直接读 Eagle 物理原图与哈希，拼接后仅回存成品。`ecom stitch` 为本地副本兼容入口。
-9. 历史补图应以 `ecom archive <商品ID> --check` 对账 Eagle 当前实物；保存独立快照，不改原始 receipt。文件缺失或同名/重导入结果不确定时不得重复 `item_add`。
-10. 回执不完整、页面访问异常、已有人工 HTML 或旧文件冲突时按 `docs/RECOVERY.md` 选择固定命令，不凭 Agent 猜测处理。只操作当前 Agent 创建并拥有的商品标签页。
-11. 项目内目录、配置、锁和历史回执各有所属；不直接修改外部 Chrome Profile 或 Eagle 素材库内部文件；经授权新增/分类 Eagle 素材只使用官方 API，保留原图。统一 setup 可在项目内部自动执行固定版本 `npm ci`，但**系统软件安装仅能在明确授权下通过 `-InstallSystemDependencies`**。不自动处理验证码、账号登录；不执行 Git commit/push、不批量删除历史文件。
+4. 批量模式通过 `node scripts/ecom.mjs batch <urls.txt|urls.json> --check|--apply` 进入；顺序采集、不修改原始 URL、已存在回执必须跳过，每个商品独立记录状态。失败商品不得直接重跑整单；只在受控恢复后用 `ecom verify-live <ID> --apply` 更新本地索引，不改原始 receipt。
+5. 默认 `storageMode: copy` 本地输出到 `output/`；用户显式路径优先。`storageMode: eagle` 时不复制本地图片，但仍保存索引与回执；按需 `ecom export <商品ID>`。旧商品输出路径保持不变，不移动或重采。
+6. Eagle `item_add` 按最多 8 张分批提交且记录每批提交状态，`item_get` 由脚本自动有限次重查；遇 Eagle「使用原图」时，先验证已关联原 itemId 和商品级图片序号映射，再计入已完成。既有素材不改名不覆盖。**Eagle 的「重复添加提示」可能让导入等待选择，即使 MCP 返回成功也未落盘**；必须核对物理文件，不得对不确定的批次自动重发 `item_add`。
+7. 直连下载仅限 `recover-direct.mjs` 中的受控例外，**必须 Eagle 已部分验证且同一商品累计不超过 10 张**。不经过 Eagle 查重、Eagle 离线或超过上限时禁止执行。
+8. 新商品采集必须自动创建/复用 Eagle 的 `电商平台批量采集/<行业>/<ID>/主图|详情页`，分类用已有 itemId 建立文件夹关联并回读；不重发 `item_add`。`receipt.archive.status` 必须单独报告，缺图或分类不完整不得报整体完成。
+9. `copy` 模式生成 `main/`、`detail/` 和 `detail/HTML.html`；`eagle` 模式直接通过 Eagle 窗口插件预览，不创建重复素材。OCR 只按需执行；新商品完整归档后自动拼接 750px 长图，既有商品用 `ecom finish <ID>` 验证后续做，直接读 Eagle 原图与哈希并仅回存成品。`ecom stitch` 为本地副本兼容入口。
+10. 历史补图应以 `ecom archive <商品ID> --check` 对账 Eagle 当前实物；若已有受控本地补图，可先执行 `ecom recover-eagle <ID> --check`；保存独立快照，不改原始 receipt。文件缺失或同名/重导入结果不确定时不得重复 `item_add`。
+11. 回执不完整、页面访问异常、已有人工 HTML 或旧文件冲突时按 `docs/RECOVERY.md` 选择固定命令，不凭 Agent 猜测处理。只操作当前 Agent 创建并拥有的商品标签页。
+12. 项目内目录、配置、锁和历史回执各有所属；不直接修改外部 Chrome Profile 或 Eagle 素材库内部文件；经授权新增/分类 Eagle 素材只使用官方 API，保留原图。统一 setup 可在项目内部自动执行固定版本 `npm ci`，但**系统软件安装仅能在明确授权下通过 `-InstallSystemDependencies`**。不自动处理验证码、账号登录；不执行 Git commit/push、不批量删除历史文件。
+
+## V3.1 实验分支约束
+
+当前 V3 已具备本机指纹索引、浏览器一致性预取、哈希复用、单次导入状态机和 Web API 读回。PC2 已通过五商品真实采集及长图核验；失败后只有零写入日志完整证明时，才可运行 `ecom v3-resume --check|--apply <商品ID>`。`capture` 默认仍为 V2；`capture-v3` 必须显式设置本机 `v3Experimental:true`，尽管 PC2 已通过部分真实 E2E，仍需独立主机/异常场景验收，不能因为 Git 合并而自动启用。
+V3 只在 Node.js 24+ 使用内置 SQLite，不能因此抬高 V2 Node 最低版本或自动安装运行时。
+禁止读取到旧的 `import_intent` 后重发 Eagle `item/add`；库级锁、独立导入事件日志、原图缓存与商品原回执都属于必须保留的恢复证据。详情见 `docs/PIPELINE-RULES.md`。
+
+## 自动行业分类与 Eagle 展示
+
+- 分类使用商品 ID 而非共享 Eagle 图片 ID；商品登记 data/captures.json 是唯一事实来源，不修改历史 receipt 或淘宝 URL。人工更正 manualLocked 必须保留。
+- 采集完成及 verify-live --apply 完成时按商品标题自动分类并在已验收的首张 750px 长图上增量设置专用行业标签；失败返回 industrySync 独立结果，不改变采集成功状态。
+- PC2 已将 29 个历史商品完整迁移为 `电商平台批量采集/<行业>/<商品ID>/主图|详情页`，采用 Eagle 官方 `folder_update(parentId)`，保留商品 ID、主图/详情目录 ID 和物理原图；未知行业进「待分类」。`eagle-folder-layout.mjs` 负责新旧结构统一解析，任何重复商品 ID 必须拒绝新建。
+- Eagle 原生智能文件夹及长图标签仅保留为辅助视图；未经额外授权不得删除。
+- 行业实体目录操作：`ecom industry-folders --check [ID]` 只读、`--apply ID|--all` 按 ID 一次移动、`--rollback ID` 只读回退计划（真正回退需要再传 `--apply`）。`ecom industry --set ID industry subcategory` 人工锁定后会同步移动商品实体目录。分类证据不足需待人工确认，不自动调用 LLM。
+- 迁移前记录 `data/migrations/industry` 快照（商品/主图/详情子目录 ID、根目录长图 itemId、各类目 itemId 集合）；`data/locks/industry-layout.lock` 存在时禁止新采集写入。未知文件夹移动结果必须只读核对，不重复提交；历史 `migrate-eagle` 只能合并旧日期根目录，不能把行业结构展平。
 
 ## 质量闸门
 

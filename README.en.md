@@ -1,6 +1,6 @@
 # ecom-image-capture
 
-A Windows-first CLI for capturing Tmall product main/detail images using **Chrome DevTools MCP** and the **official Eagle MCP Server plugin**. It verifies Eagle imports, copies source assets to local folders and generates a self-contained offline `detail/HTML.html` viewer. OCR is optional.
+A Windows-first CLI for capturing Tmall product main/detail images with **Chrome DevTools MCP** and the **official Eagle MCP Server plugin**. It verifies original Eagle assets, supports optional local copies and offline HTML in `copy` mode, and stitches a verified 750px detail-long JPEG after a complete archive. OCR is optional.
 
 ## Requirements
 
@@ -36,7 +36,22 @@ Log into Tmall using the newly opened, project-specific Chrome window. Install a
 .\ecom.cmd capture "<your full original Tmall product URL>"
 ```
 
-A successful capture produces `output/<productId>/main/`, `output/<productId>/detail/` and `output/<productId>/detail/HTML.html`.
+In default `copy` mode, a successful capture produces `output/<productId>/main/`, `output/<productId>/detail/` and `output/<productId>/detail/HTML.html`. In optional `storageMode: eagle` mode, Eagle retains the originals and its window plugin previews them directly; no redundant local image copies are created.
+
+## Eagle industry folders and verified long images
+
+The canonical Eagle layout is **`电商平台批量采集 / <industry> / <productId> / 主图 | 详情页`**. Industry is identified from the actual product title and stored per product in `data/captures.json`. Existing product folders are moved by changing their parent folder ID: item IDs, main/detail folder IDs and long-image associations are retained. Unknown or ambiguous product categories go under `待分类`. Native Eagle smart folders and tags remain optional secondary views.
+
+```powershell
+node scripts/ecom.mjs industry --check
+node scripts/ecom.mjs industry --list electronics
+node scripts/ecom.mjs industry-folders --check
+node scripts/ecom.mjs industry --set <productId> electronics powerbank
+```
+
+Folder migration is an explicitly controlled operation (`industry-folders --apply <productId>`); it does not re-import files. PC2 has verified 29 product-folder moves and 11 complete products' long JPEGs. **This does not migrate another machine's Eagle library:** PC1 must reconcile its own archive and product registry before any local folder changes. See [pipeline rules](docs/PIPELINE-RULES.md) and [recovery](docs/RECOVERY.md).
+
+The default `capture` command remains the V2 pipeline. V3.1 source-hash reuse is **experimental, disabled by default**, and requires Node.js 24+ plus an explicit per-machine configuration flag. Do not turn it on simply because its code is present in Git.
 
 ## Optional OCR
 

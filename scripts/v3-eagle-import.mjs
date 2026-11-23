@@ -1,0 +1,182 @@
+// V3.1 deterministic single-image import orchestration.
+// PREVENTS duplicate item_add: write an intent before any official API mutation.
+import {existsSync,statSync} from 'node:fs';
+import {openFingerprintDatabase,inspectIndexedItem,chooseExactMatch,sha256File} from './v3-fingerprint.mjs';
+import {prefetchOriginalRepresentation,validateOriginalRepresentation,saveCacheFile} from './v3-prefetch.mjs';
+import {createJob,createStoredJob,recordJobEvent,acquireLibraryLock,maySubmitSlot,loadJob,assertNoWriteResume} from './v3-job-state.mjs';
+
+const pause=ms=>new Promise(done=>setTimeout(done,ms));
+const isId=id=>typeof id==='string'&&/^[A-Za-z0-9_-]{8,64}$/.test(id);
+
+export async function eagleV2GetById(id,{baseUrl='http://127.0.0.1:41595',fetchFn=fetch}={}) {
+  if(!isId(id))throw Error('Unsafe Eagle ID');
+  const uri=new URL('/api/v2/item/get',baseUrl);
+  uri.searchParams.set('id',id);
+  const response=await fetchFn(uri.href,{signal:AbortSignal.timeout(30000)});
+  if(!response.ok)throw Error('Eagle V2 get HTTP '+response.status);
+  const data=await response.json();
+  if(data.status!=='success'||!Array.isArray(data.data?.data))
+    throw Error('Eagle V2 get invalid response');
+  const rows=data.data.data.filter(x=>x.id===id);
+  if(rows.length>1)throw Error('Eagle duplicate ID in get result');
+  return rows[0]||null;
+}
+
+export async function eagleV2AddFromPath(image,{baseUrl='http://127.0.0.1:41595',fetchFn=fetch}={}) {
+  if(!image?.path||!image?.name||!isId(image.folder))throw Error('Unsafe V3 Eagle path import');
+  if(!existsSync(image.path)||statSync(image.path).size<12)throw Error('V3 original cache unavailable');
+  const response=await fetchFn(new URL('/api/v2/item/add',baseUrl).href,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({path:image.path,name:image.name,folders:[image.folder],website:image.website}),
+    signal:AbortSignal.timeout(90000)});
+  if(!response.ok)throw Error('Eagle V2 add HTTP '+response.status);
+  const data=await response.json();
+  if(data.status!=='success')throw Error('Eagle V2 add rejected request: '+String(data.message||'unknown'));
+  const payload=data.data;
+  const id=typeof payload==='string'?payload:(payload?.id||payload?.itemId||payload?.item?.id);
+  if(!isId(id))throw Error('Eagle acknowledged import without valid item ID; never automatically resubmit');
+  return id;
+}
+
+export async function validateEagleCandidate(candidate,{getById,libraryPath,expectedSha,folderId}) {
+  if(!candidate?.id||candidate.sha256!==expectedSha)return null;
+  const item=await getById(candidate.id);
+  if(!item||item.isDeleted===true)return null;
+  const physical=await inspectIndexedItem(libraryPath,item);
+  if(!physical||physical.sha256!==expectedSha)return null;
+  return {...physical,verified:true,folders:item.folders||[],targetFolderId:folderId};
+}
+
+export async function verifyEagleById(id,{getById,libraryPath,expectedSha,folderId,delays=[0,400,1000,2300]}) {
+  for(const delay of delays){
+    if(delay)await pause(delay);
+    const item=await getById(id);
+    if(!item||item.isDeleted===true||!item.folders?.includes(folderId))continue;
+    const physical=await inspectIndexedItem(libraryPath,item);
+    if(physical?.sha256===expectedSha)return {...physical,verified:true};
+  }
+  return null;
+}
+
+export async function resolveV3ExactMatch({index,sha256,folderId,getById,libraryPath}) {
+  const rows=index.lookup(sha256),checked=[];
+  for(const candidate of rows){
+    const proof=await validateEagleCandidate(candidate,{getById,libraryPath,expectedSha:sha256,folderId});
+    if(proof)checked.push(proof);
+  }
+  if(rows.length&&checked.length===0)
+    throw Error('Existing Eagle hash candidate is not verifiable; refresh read-only evidence, never reimport same bytes');
+  return chooseExactMatch(checked,folderId);
+}
+
+export async function processV3ImportedImages({root,productId,url,images,libraryPath,folderIds,
+  indexPath,getById=eagleV2GetById,importLocal=eagleV2AddFromPath,
+  linkFolders,fetchImage=prefetchOriginalRepresentation,checkLibrary=null,resumeNoWrite=false}={}){
+  if(!root||!libraryPath||!url||!Array.isArray(images)||!images.length||
+     !folderIds?.main||!folderIds?.detail||typeof linkFolders!=='function')
+    throw Error('Incomplete V3 import dependencies');
+  const index=await openFingerprintDatabase(indexPath,{libraryPath});
+  const out=[];
+  let job=null;
+  try {
+    const indexInfo=index.info();
+    if(!indexInfo.activeGeneration)throw Error('V3 fingerprint index has no verified generation');
+    let expectedLibraryTotal=Number(indexInfo.libraryItemTotal);
+    if(!Number.isInteger(expectedLibraryTotal)||expectedLibraryTotal<0||typeof checkLibrary!=='function')
+      throw Error('V3 needs a current full-library index and read-only count verifier');
+    if(resumeNoWrite){
+      job=loadJob(root,productId);
+      assertNoWriteResume(root,job,images,libraryPath,url);
+    }else{
+      job=createJob({productId,url,slots:images,libraryPath});
+      createStoredJob(root,job); // Refuse existing jobs instead of overwriting history.
+    }
+    // Prefetch ALL originals before the first irreversible Eagle write.
+    // A zero-write recovery may reuse exact verified cache bytes; no Eagle writes are repeated.
+    for(const slot of job.slots){
+      const key=slot.category+':'+slot.order;
+      try{
+        if(resumeNoWrite&&slot.cachePath){
+          if(!existsSync(slot.cachePath)||!slot.sha256||statSync(slot.cachePath).size!==slot.bytes||
+             await sha256File(slot.cachePath)!==slot.sha256)
+            throw Error('Existing V3 cache changed; never overwrite or silently redownload');
+          if(slot.state!=='prefetched')
+            recordJobEvent(root,job,{slotKey:key,event:'prewrite_guard_resumed_using_verified_cache',
+              metadata:{state:'prefetched',error:null}});
+          continue;
+        }
+        const bytes=await fetchImage(slot.url);
+        const repr=bytes.representation||validateOriginalRepresentation(slot.url,bytes.ext);
+        if(repr.status==='representation_changed')throw Error('CDN returned a different file representation');
+        if(slot.sha256&&slot.sha256!==bytes.sha256)
+          throw Error('CDN source hash changed from previously verified value');
+        const cachePath=saveCacheFile(root,productId,slot,bytes);
+        const metadata={sha256:bytes.sha256,cachePath,bytes:bytes.size,ext:bytes.ext,error:null,
+          ...(repr.status==='server_encoded_differently'?{representationDeviation:repr}:{})};
+        if(resumeNoWrite&&slot.state==='needs_read_only_review')
+          recordJobEvent(root,job,{slotKey:key,event:'prewrite_guard_resumed_after_safe_prefetch',
+            metadata:{...metadata,state:'prefetched'}});
+        else
+          recordJobEvent(root,job,{slotKey:key,state:'prefetched',
+            event:'original_bytes_verified',metadata});
+      }catch(error){
+        if(slot.state==='needs_read_only_review')
+          recordJobEvent(root,job,{slotKey:key,event:'prefetch_still_failed',
+            metadata:{error:String(error.message||error)}});
+        else recordJobEvent(root,job,{slotKey:key,state:'needs_read_only_review',
+            event:'prefetch_failed',metadata:{error:String(error.message||error)}});
+        throw Error('V3 prefetch failed before Eagle writes: '+slot.name+' '+error.message);
+      }
+    }
+    for(const slot of job.slots){
+      const release=acquireLibraryLock(root,libraryPath);
+      const key=slot.category+':'+slot.order,folderId=folderIds[slot.category];
+      try{
+        const actualCount=await checkLibrary();
+        if(actualCount!==expectedLibraryTotal)throw Error('Eagle library changed since fingerprint indexing; safely stop before any new item_add');
+        const match=await resolveV3ExactMatch({index,sha256:slot.sha256,folderId,getById,libraryPath});
+        if(match){
+          recordJobEvent(root,job,{slotKey:key,state:'matched',event:'exact_eagle_bytes_matched',
+            metadata:{itemId:match.id,resolution:'reused'}});
+          if(!match.folders.includes(folderId)){
+            recordJobEvent(root,job,{slotKey:key,state:'reuse_link_intent',event:'eagle_folder_link_submitting',
+              metadata:{itemId:match.id}});
+            await linkFolders([match.id],[folderId]);
+          }
+          const verified=await verifyEagleById(match.id,{getById,libraryPath,expectedSha:slot.sha256,folderId});
+          if(!verified)throw Error('Eagle folder link outcome uncertain; never retry link blindly');
+          recordJobEvent(root,job,{slotKey:key,state:'verified',event:'reuse_physical_verified',
+            metadata:{itemId:verified.id,sha256:verified.sha256,resolution:'reused'}});
+          out.push({...slot,verified:true,itemId:verified.id,eagleName:verified.name,
+            filePath:verified.filePath,sha256:verified.sha256,resolution:'reused',
+            savedWidth:verified.width,savedHeight:verified.height,ext:verified.ext});
+        }else{
+          if(!maySubmitSlot(slot))throw Error('V3 slot may have been submitted; never auto resubmit');
+          recordJobEvent(root,job,{slotKey:key,state:'import_intent',
+            event:'single_eagle_import_submitting',metadata:{submitIntentRecorded:true}});
+          const id=await importLocal({path:slot.cachePath,name:slot.name,folder:folderId,website:url});
+          recordJobEvent(root,job,{slotKey:key,state:'import_acknowledged',event:'single_eagle_import_acknowledged',
+            metadata:{itemId:id}});
+          const verified=await verifyEagleById(id,{getById,libraryPath,expectedSha:slot.sha256,folderId});
+          if(!verified)throw Error('Eagle import accepted but physical file/folder unverified; no retry');
+          index.upsertVerified(verified);
+          expectedLibraryTotal++;
+          index.setLibraryItemTotal(expectedLibraryTotal);
+          recordJobEvent(root,job,{slotKey:key,state:'verified',event:'single_eagle_import_verified',
+            metadata:{itemId:id,sha256:verified.sha256,resolution:'imported'}});
+          out.push({...slot,verified:true,itemId:id,eagleName:verified.name,
+            filePath:verified.filePath,sha256:verified.sha256,resolution:'imported',
+            savedWidth:verified.width,savedHeight:verified.height,ext:verified.ext});
+        }
+      }catch(error){
+        if(slot.state!=='needs_read_only_review'&&slot.state!=='verified')
+          recordJobEvent(root,job,{slotKey:key,state:'needs_read_only_review',
+            event:'eagle_outcome_uncertain',metadata:{error:String(error.message||error)}});
+        throw Error('V3 stop with journal; '+slot.name+': '+error.message);
+      }finally{release()}
+    }
+    job.state='verified';
+    recordJobEvent(root,job,{event:'all_slots_physically_verified'});
+    return {status:'verified',job,images:out};
+  }finally{index.close()}
+}
