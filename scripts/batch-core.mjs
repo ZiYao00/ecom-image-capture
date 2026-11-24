@@ -30,3 +30,15 @@ export function classifyBatchProduct(entry,existing,receiptExists){
  if(existing)return 'skipped_registry_without_receipt';
  return 'ready_for_new_capture';
 }
+
+// A shared Eagle/browser failure can poison every later product in the same queue.
+// Only a positively identified, product-local scan failure before Eagle writes may continue.
+export function shouldHaltBatchAfterAttempt({status,result,receipt}={}){
+  if(status==='complete')return false;
+  const localScan=result?.status==='incomplete_before_eagle'&&
+    /^Chrome: Main\/detail images incomplete:/.test(String(result?.error||''))&&
+    receipt?.phase==='incomplete_before_eagle'&&receipt?.eagle==='not_called'&&
+    Array.isArray(receipt?.images)&&receipt.images.length===0&&
+    !(receipt?.eagleBatches?.length);
+  return !localScan;
+}

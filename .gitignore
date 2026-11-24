@@ -133,6 +133,8 @@ data/
 !/scripts/v3-eagle-import.mjs
 !/scripts/v3-web-readback.mjs
 !/scripts/v3-resume-no-write.mjs
+!/scripts/v3-recovery-core.mjs
+!/scripts/v3-resume-partial.mjs
 !/scripts/industry-core.mjs
 !/scripts/industry-eagle.mjs
 !/scripts/industry-cli.mjs

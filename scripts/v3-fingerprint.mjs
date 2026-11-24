@@ -116,6 +116,10 @@ export async function openFingerprintDatabase(file,{libraryPath}={}) {
     db,
     close:()=>db.close(),
     info:()=>Object.fromEntries(db.prepare('SELECT key,value FROM meta').all().map(x=>[x.key,x.value])),
+    inventory:()=>{
+      const generation=db.prepare('SELECT value FROM meta WHERE key=?').get('activeGeneration')?.value;
+      return generation?db.prepare('SELECT item_id AS id,size,mtime FROM images WHERE generation=? ORDER BY item_id').all(generation):[];
+    },
     lookup:(sha256)=>{
       const generation=db.prepare('SELECT value FROM meta WHERE key=?').get('activeGeneration')?.value;
       if(!generation||!/^[a-f0-9]{64}$/.test(sha256))return [];
@@ -149,6 +153,22 @@ export async function openFingerprintDatabase(file,{libraryPath}={}) {
       return generation;
     }
   };
+}
+
+// Detect equal-count replacement and physical changes before a new write phase.
+// Existing exact hash candidates are still independently re-read before reuse.
+export async function assertFingerprintInventory(index,libraryPath,{listItems=listWebApiItems}={}){
+  const info=index.info(),live=await listItems();
+  const indexed=new Map(index.inventory().map(x=>[x.id,x]));
+  const eligible=live.items.filter(imageItem);
+  if(live.total!==Number(info.libraryItemTotal)||indexed.size!==eligible.length)
+    throw Error('Eagle inventory differs from active fingerprint generation; rebuild before writes');
+  for(const item of eligible){
+    const row=indexed.get(item.id),physical=physicalImagePath(libraryPath,item);
+    if(!row||!physical||physical.bytes!==row.size||statSync(physical.filePath).mtimeMs!==row.mtime)
+      throw Error('Eagle inventory identity or physical metadata changed: '+item.id+'; rebuild before writes');
+  }
+  return {status:'current',total:live.total,eligible:eligible.length};
 }
 
 export async function syncV3StitchPartsToIndex({indexPath,libraryPath,parts,getById,getLiveCount}={}){

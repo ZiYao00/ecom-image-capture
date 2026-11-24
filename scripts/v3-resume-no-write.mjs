@@ -7,7 +7,7 @@ import{fileURLToPath}from'node:url';
 import{randomUUID}from'node:crypto';
 import{acquireProductLock}from'./capture-store.mjs';
 import{loadJob,assertNoWriteResume}from'./v3-job-state.mjs';
-import{visibleEagleItemCount,openFingerprintDatabase,syncV3StitchPartsToIndex}from'./v3-fingerprint.mjs';
+import{visibleEagleItemCount,openFingerprintDatabase,syncV3StitchPartsToIndex,assertFingerprintInventory}from'./v3-fingerprint.mjs';
 import{processV3ImportedImages,eagleV2GetById}from'./v3-eagle-import.mjs';
 import{eagleArchiveRpc,ensureEagleProductFolders,archiveEagleProduct,ECOM_ARCHIVE_ROOT}from'./eagle-archive.mjs';
 import{createV3ReadbackRpc}from'./v3-web-readback.mjs';
@@ -53,7 +53,7 @@ try{
  const imported=await processV3ImportedImages({root,productId:id,url,images:receipt.images,
    libraryPath:app.libraryPath,folderIds:folders,indexPath,resumeNoWrite:true,
    linkFolders:(ids,fids)=>rpc('item_add_to_folders',{ids,folders:fids}),
-   checkLibrary:visibleEagleItemCount});
+   checkLibrary:visibleEagleItemCount,checkInventory:assertFingerprintInventory});
  if(imported.status!=='verified'||imported.images.length!==receipt.images.length)
    throw Error('Incomplete V3 import result');
  const readRpc=createV3ReadbackRpc({eagleMcpUrl:cfg.eagleMcpUrl,libraryPath:app.libraryPath});

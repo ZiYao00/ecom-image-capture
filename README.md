@@ -61,17 +61,19 @@ PC2 历史 29 个商品已整体迁移到行业实体目录：成人用品 19、
 
 ## V3.1 实验功能（默认关闭，非正式采集版本）
 
-新增 Eagle 全库原图 SHA-256 索引与内容一致性预检。PC2 已完成五个不同商品的真实 V3 采集测试：150 个图片位置全部通过独立核验（其中 131 张新增、19 张复用已有 Eagle 原图），5 张 750px 详情长图全部完整。V2 `capture` 不受影响。
+新增 Eagle 全库原图 SHA-256 索引与内容一致性预检。PC2 已完成五个不同商品的真实 V3 采集测试：150 个图片位置全部通过独立核验（其中 131 张新增、19 张复用已有 Eagle 原图），5 张 750px 详情长图全部完整。2026-11-24 AA 六商品进一步验证 301/301 图片位置、6/6 长图；三个 V2 历史任务保护 32 个已提交位置、补齐 126 个明确未提交位置。V2 `capture` 不受影响。
 
 ```powershell
 node scripts/ecom.mjs v3-index --check 30              # 只读抽样
 node scripts/ecom.mjs v3-index --build                 # 仅写本机 SQLite 索引
 node scripts/ecom.mjs v3-prefetch --check <商品ID>      # 无 Eagle 写入，需已有回执
 node scripts/ecom.mjs v3-resume --check <商品ID>        # 仅检查零 Eagle 写入的失败任务
+node scripts/ecom.mjs v3-resume-partial --check <商品ID> [原始完整URL] # 逐位置安全恢复预检
+# 预检通过后才使用 v3-resume-partial --apply；首次 V2 恢复须提供完整原 URL
 node scripts/ecom.mjs v3-resume --apply <商品ID>        # 日志证明零提交后，安全继续并完成后处理
 ```
 
-V3 需要 Node.js 24+；项目 V2 最低要求不变。V3 正式导入命令 `capture-v3 "<完整URL>"` 需本机显式设置 `v3Experimental: true` 才可运行。**当前仍保持 V3 实验模式**：真实新增原图导入、跨商品复用、零提交安全恢复已通过五商品测试；仍需更广泛的异常写入、并发及跨机器回归才考虑默认切换。V3 的输入缓存、素材库锁和导入事件日志均位于被 Git 忽略的 `data/`。详见 `docs/PIPELINE-RULES.md` 和 `docs/RECOVERY.md`。
+V3 需要 Node.js 24+；项目 V2 最低要求不变。V3 正式导入命令 `capture-v3 "<完整URL>"` 需本机显式设置 `v3Experimental: true` 才可运行。**当前仍保持 V3 实验模式**：真实新增原图导入、跨商品复用、零提交安全恢复和 V2 历史部分提交恢复已通过 PC2 实测；仍需更广泛的异常写入、并发及跨机器回归才考虑默认切换。V3 的输入缓存、素材库锁和导入事件日志均位于被 Git 忽略的 `data/`。详见 `docs/PIPELINE-RULES.md` 和 `docs/RECOVERY.md`。
 
 ## 默认输出（`storageMode: copy`）
 
@@ -123,7 +125,7 @@ output/
 
 所有命令都有 JSON 输出，成功退出码 `0`，需要用户/Agent 操作时 `10`，失败且不可盲目重试时 `2`。需要脚本集成时也可直接运行 `node scripts/ecom.mjs ...`。底层原始脚本继续保留供高级维护。
 
-**批量清单**：UTF-8 文本文件，每行一条完整原始天猫商品 URL；也接受 JSON 字符串数组。批量队列顺序处理、逐商品保存回执；已采集成功或已有不完整回执的商品一律跳过，不会自动重新提交。对少量确认与全库素材完全相同的缺图，可先执行受控 `recover-direct`，再显式使用 `recover-duplicates` 进行内容一致而文件哈希不同的恢复；GIF 动画必须保持帧和时序。最后调用 `finish`、`verify-live --apply` 完成后处理与最新状态回写，原始回执不变。新入口的既有商品安全跳过已实测通过，尚需以全新 URL 清单验证连续采集。
+**批量清单**：UTF-8 文本文件，每行一条完整原始天猫商品 URL；也接受 JSON 字符串数组。批量队列顺序处理、逐商品保存回执；已采集成功或已有不完整回执的商品一律跳过，不会自动重新提交；新商品若发生共享服务故障、不确定写入或验收失败，批次熔断并保留后续未开始记录。对少量确认与全库素材完全相同的缺图，可先执行受控 `recover-direct`，再显式使用 `recover-duplicates` 进行内容一致而文件哈希不同的恢复；GIF 动画必须保持帧和时序。最后调用 `finish`、`verify-live --apply` 完成后处理与最新状态回写，原始回执不变。新入口的既有商品安全跳过已实测通过，尚需以全新 URL 清单验证连续采集。
 
 **Eagle 是唯一常规图片下载/归档工具。** `stitch-eagle` 默认不复制一整套本地原始图片；以当前 Eagle 真实文件及 SHA-256 为准，返回已存在结果时不会再提交。历史补图的现状使用 `archive --check` 读取当前 Eagle，不重写初次 receipt。 只允许对 Eagle 已提交但确认少量缺失的商品，通过独立恢复命令补图，同一商品任务累计 **最多 10 张**。不得在状态不确定时重复提交 `item_add`。不修改原图，保留 GIF 动画；新商品图片完整后自动拼接长图；Eagle 缺图或任一提交结果不确定时保留失败状态，不把缺图拼接成假完整。
 

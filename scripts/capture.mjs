@@ -24,7 +24,7 @@ import {listFolderItems,hashEagleFile,readCurrentEagleProduct} from './eagle-cur
 import {makeMap,saveMap} from './eagle-product-map.mjs';
 import {mirrorEagleMap} from './eagle-map-mirror.mjs';
 import {processV3ImportedImages,eagleV2GetById} from './v3-eagle-import.mjs';
-import {visibleEagleItemCount,syncV3StitchPartsToIndex} from './v3-fingerprint.mjs';
+import {visibleEagleItemCount,syncV3StitchPartsToIndex,assertFingerprintInventory} from './v3-fingerprint.mjs';
 import {createV3ReadbackRpc} from './v3-web-readback.mjs';
 import {syncIndustryAfterProductComplete} from './industry-eagle.mjs';
 import {classifyProductTitle,isConfidentClassification} from './industry-core.mjs';
@@ -507,7 +507,7 @@ try {
       root,productId,url:canonical,images:receipt.images,libraryPath:app.libraryPath,
       folderIds:folders,indexPath,
       linkFolders:(ids,fids)=>eagleRpc('item_add_to_folders',{ids,folders:fids},60000),
-      checkLibrary:async()=>visibleEagleItemCount()
+      checkLibrary:async()=>visibleEagleItemCount(),checkInventory:assertFingerprintInventory
     });
     receipt.images=imported.images;
     receipt.eagle='verified';

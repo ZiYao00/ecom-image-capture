@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {parseBatchUrls,classifyBatchProduct} from '../scripts/batch-core.mjs';
+import {parseBatchUrls,classifyBatchProduct,shouldHaltBatchAfterAttempt} from '../scripts/batch-core.mjs';
 const a='https://detail.tmall.com/item.htm?abbucket=11&id=644572484093&pisk=literal-tracking-token';
 const b='https://detail.tmall.com/item.htm?abbucket=4&id=976328773394&skuId=5946756932483&xxc=taobaoSearch';
 test('batch parser preserves complete original URLs and ordered item IDs',()=>{
@@ -25,4 +25,18 @@ test('complete/partial/preexisting products are never silently resubmitted',()=>
  assert.equal(classifyBatchProduct(entry,null,true),'skipped_existing_needs_review');
  assert.equal(classifyBatchProduct(entry,{status:'incomplete'},false),'skipped_registry_without_receipt');
  assert.equal(classifyBatchProduct(entry,null,false),'ready_for_new_capture');
+});
+
+test('batch stops later writes on an uncertain import, timeout or shared failure',()=>{
+ assert.equal(shouldHaltBatchAfterAttempt({status:'needs_read_only_recovery',result:{status:'incomplete'}}),true);
+ assert.equal(shouldHaltBatchAfterAttempt({status:'needs_read_only_recovery',result:null}),true);
+ assert.equal(shouldHaltBatchAfterAttempt({status:'needs_browser_safe_resume',result:{status:'incomplete_before_eagle',error:'Chrome: Tmall access abnormal'}}),true);
+ assert.equal(shouldHaltBatchAfterAttempt({status:'complete'}),false);
+});
+test('batch continues only for proven product-local scan failure with no Eagle writes',()=>{
+ const result={status:'incomplete_before_eagle',error:'Chrome: Main/detail images incomplete: main=5 detail=0'};
+ const receipt={phase:'incomplete_before_eagle',eagle:'not_called',images:[]};
+ assert.equal(shouldHaltBatchAfterAttempt({status:'needs_browser_safe_resume',result,receipt}),false);
+ assert.equal(shouldHaltBatchAfterAttempt({status:'needs_browser_safe_resume',result,receipt:{...receipt,eagle:'may_have_submitted'}}),true);
+ assert.equal(shouldHaltBatchAfterAttempt({status:'needs_browser_safe_resume',result,receipt:null}),true);
 });

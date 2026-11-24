@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // Serial multi-URL queue. No duplicate imports; existing receipts are never resubmitted.
-// Each planned/invoking/completed step is persisted. Failed items do not stop other new items.
+// Each planned/invoking/completed step is persisted. Shared or uncertain failures halt subsequent writes.
 import {readFileSync,writeFileSync,existsSync,mkdirSync,renameSync} from 'node:fs';
 import {resolve,join,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 import {readRegistry} from './capture-store.mjs';
-import {parseBatchUrls,classifyBatchProduct} from './batch-core.mjs';
+import {parseBatchUrls,classifyBatchProduct,shouldHaltBatchAfterAttempt} from './batch-core.mjs';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const [mode,file]=process.argv.slice(2);
 if(!['--check','--apply'].includes(mode)||!file||process.argv.length!==4)
@@ -46,8 +46,13 @@ const run=(cmd,args,{timeout=420000}={})=>{
   data:obj,error:String(child.error?.message||child.stderr||'').slice(0,800)};
 };
 const summary=[];
+let halt=null;
 for(const entry of entries){
  const row=journal.items[entry.index-1];
+ if(halt){
+  row.status='not_started_due_to_batch_halt';row.error='Blocked by '+halt.productId;row.finishedAt=new Date().toISOString();save();
+  summary.push({id:entry.productId,status:row.status});continue;
+ }
  // Check current registry again, since an earlier step or user may have changed it.
  const reg=readRegistry(root).products[entry.productId]||null;
  const state=classifyBatchProduct(entry,reg,receiptExists(entry.productId));
@@ -78,6 +83,12 @@ for(const entry of entries){
   row.status=archive.ok&&archive.data?.result?.status==='complete'&&long.ok&&long.data?.result?.status==='already_complete'
     ?'complete':'needs_read_only_recovery';
  }
+ let receipt=null;
+ if(row.status!=='complete')try{receipt=JSON.parse(readFileSync(join(root,'data','runs','stable-'+entry.productId,'receipt.json'),'utf8'))}catch{}
+ if(shouldHaltBatchAfterAttempt({status:row.status,result:attempt.data?.result,receipt})){
+  halt={productId:entry.productId,status:row.status,error:row.error||'Independent verification failed'};
+  journal.halt=halt;
+ }
  row.finishedAt=new Date().toISOString();save();
  summary.push({id:entry.productId,status:row.status,main:row.captureResult?.main||0,
    detail:row.captureResult?.detail||0,verified:row.captureResult?.verified||0});
@@ -91,5 +102,5 @@ console.log(JSON.stringify({status:journal.status,operation:'batch-capture',inpu
   newlyComplete:summary.filter(x=>x.status==='complete').length,
   existingComplete:summary.filter(x=>x.status==='skipped_existing_complete').length,
   needsReview:summary.filter(x=>!['complete','skipped_existing_complete'].includes(x.status)).length,
-  summary,journal:fileName,noAutomaticReimport:true},null,2));
+  summary,halt,journal:fileName,noAutomaticReimport:true},null,2));
 if(journal.status!=='complete')process.exitCode=2;
