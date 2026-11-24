@@ -10,6 +10,7 @@ import {eagleArchiveRpc} from './eagle-archive.mjs';
 import {readCurrentEagleProduct,listFolderItems,hashEagleFile} from './eagle-current.mjs';
 import {planEagleStitch} from './stitch-eagle-core.mjs';
 import {syncIndustryAfterProductComplete} from './industry-eagle.mjs';
+import {verifyDeliveryMode} from './copy-delivery.mjs';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const [id,mode]=process.argv.slice(2);
 if(!/^\d{8,16}$/.test(id||'')||!['--check','--apply'].includes(mode)||process.argv.length!==4)
@@ -53,20 +54,24 @@ try{
   if(summary.longParts.length===plan.names.length&&summary.longStatus==='not_checked')
    summary.longStatus='complete';
  }
- const complete=summary.archiveStatus==='complete'&&(mapExtrasNonBlocking||!summary.unrelated.length)&&summary.longStatus==='complete';
+ const eagleComplete=summary.archiveStatus==='complete'&&(mapExtrasNonBlocking||!summary.unrelated.length)&&summary.longStatus==='complete';
+ if(eagleComplete){
+  try{summary.delivery=await verifyDeliveryMode(snapshot,receipt,old)}catch(e){summary.delivery={status:'incomplete',mode:receipt.storageMode||old.storageMode||'copy',error:String(e.message||e)}}
+ }else summary.delivery={status:'not_checked'};
+ const complete=eagleComplete&&summary.delivery.status==='complete';
  summary.status=complete?'complete':'incomplete';
  if(mode==='--check'){
   console.log(JSON.stringify({...summary,apply:false,registryModified:false},null,2));
   if(!complete)process.exitCode=2;
  }else{
-  if(!complete)throw Error('Cannot mark product complete until Eagle archive and all long parts physically verify');
+  if(!complete)throw Error('Cannot mark product complete until Eagle archive, long parts and recorded storage-mode delivery verify');
   const dir=join(root,'data','reconciliations');mkdirSync(dir,{recursive:true});
   const file=join(dir,'live-'+id+'-'+new Date().toISOString().replace(/[:.]/g,'-')+'-'+randomUUID().slice(0,6)+'.json');
   writeFileSync(file,JSON.stringify(summary,null,2)+'\n',{flag:'wx'});
   const patch={productId:id,status:'success',workflowStatus:'complete',eagleStatus:'verified',
    archiveStatus:'complete',verifiedCount:summary.expected.main+summary.expected.detail,
    liveVerifiedAt:summary.verifiedAt,liveVerification:'eagle_physical_items_and_long_hashes',
-   liveSnapshot:file,longStatus:'verified'};
+   liveSnapshot:file,longStatus:'verified',...(summary.delivery.mode==='copy'?{localStatus:'complete',copiedCount:summary.delivery.verified,htmlStatus:'verified'}:{})};
   const updated=await updateProduct(root,patch);
   const industrySync=await syncIndustryAfterProductComplete(root,id);
   console.log(JSON.stringify({...summary,industrySync,apply:true,registryModified:true,

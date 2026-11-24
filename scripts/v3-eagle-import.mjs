@@ -1,6 +1,7 @@
 // V3.1 deterministic single-image import orchestration.
 // PREVENTS duplicate item_add: write an intent before any official API mutation.
 import {existsSync,statSync} from 'node:fs';
+import {requestEagle,eagleFailureDetails} from './eagle-request.mjs';
 import {openFingerprintDatabase,inspectIndexedItem,chooseExactMatch,sha256File} from './v3-fingerprint.mjs';
 import {prefetchOriginalRepresentation,validateOriginalRepresentation,saveCacheFile} from './v3-prefetch.mjs';
 import {createJob,createStoredJob,recordJobEvent,acquireLibraryLock,maySubmitSlot,loadJob,assertNoWriteResume} from './v3-job-state.mjs';
@@ -13,9 +14,7 @@ export async function eagleV2GetById(id,{baseUrl='http://127.0.0.1:41595',fetchF
   if(!isId(id))throw Error('Unsafe Eagle ID');
   const uri=new URL('/api/v2/item/get',baseUrl);
   uri.searchParams.set('id',id);
-  const response=await fetchFn(uri.href,{signal:AbortSignal.timeout(30000)});
-  if(!response.ok)throw Error('Eagle V2 get HTTP '+response.status);
-  const data=await response.json();
+  const data=await requestEagle({endpoint:uri,operation:'item_get',timeoutMs:30000,fetchFn});
   if(data.status!=='success'||!Array.isArray(data.data?.data))
     throw Error('Eagle V2 get invalid response');
   const rows=data.data.data.filter(x=>x.id===id);
@@ -26,12 +25,9 @@ export async function eagleV2GetById(id,{baseUrl='http://127.0.0.1:41595',fetchF
 export async function eagleV2AddFromPath(image,{baseUrl='http://127.0.0.1:41595',fetchFn=fetch}={}) {
   if(!image?.path||!image?.name||!isId(image.folder))throw Error('Unsafe V3 Eagle path import');
   if(!existsSync(image.path)||statSync(image.path).size<12)throw Error('V3 original cache unavailable');
-  const response=await fetchFn(new URL('/api/v2/item/add',baseUrl).href,{
-    method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({path:image.path,name:image.name,folders:[image.folder],website:image.website}),
-    signal:AbortSignal.timeout(90000)});
-  if(!response.ok)throw Error('Eagle V2 add HTTP '+response.status);
-  const data=await response.json();
+  const data=await requestEagle({endpoint:new URL('/api/v2/item/add',baseUrl),operation:'item_add',
+    timeoutMs:90000,fetchFn,options:{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({path:image.path,name:image.name,folders:[image.folder],website:image.website})}});
   if(data.status!=='success')throw Error('Eagle V2 add rejected request: '+String(data.message||'unknown'));
   const payload=data.data;
   const id=typeof payload==='string'?payload:(payload?.id||payload?.itemId||payload?.item?.id);
@@ -258,7 +254,7 @@ export async function processV3ImportedImages({root,productId,url,images,library
       }catch(error){
         if(slot.state!=='needs_read_only_review'&&slot.state!=='verified')
           recordJobEvent(root,job,{slotKey:key,state:'needs_read_only_review',
-            event:'eagle_outcome_uncertain',metadata:{error:String(error.message||error)}});
+            event:'eagle_outcome_uncertain',metadata:{error:String(error.message||error),requestFailure:eagleFailureDetails(error)}});
         throw Error('V3 stop with journal; '+slot.name+': '+error.message);
       }finally{release()}
     }

@@ -7,7 +7,8 @@ import {randomUUID} from 'node:crypto';
 import {acquireProductLock,canonicalProductUrl,readRegistry} from './capture-store.mjs';
 import {assertIndustryMigrationNotActive} from './eagle-industry-move.mjs';
 import {loadJob} from './v3-job-state.mjs';
-import {buildLegacyRecoveryPlan,receiptDigest} from './v3-recovery-core.mjs';
+import {buildLegacyRecoveryPlan,receiptDigest,inspectPartialJournal} from './v3-recovery-core.mjs';
+import {verifyDeliveryMode} from './copy-delivery.mjs';
 import {visibleEagleItemCount,assertFingerprintInventory,syncV3StitchPartsToIndex} from './v3-fingerprint.mjs';
 import {processV3ImportedImages,eagleV2GetById} from './v3-eagle-import.mjs';
 import {eagleArchiveRpc,ensureEagleProductFolders,archiveEagleProduct,ECOM_ARCHIVE_ROOT} from './eagle-archive.mjs';
@@ -58,7 +59,21 @@ try{
     resumePartial:!!job,legacyPlan,checkLibrary:visibleEagleItemCount,
     checkInventory:assertFingerprintInventory,
     linkFolders:(ids,fids)=>rpc('item_add_to_folders',{ids,folders:fids})};
-  const checked=await processV3ImportedImages({...args,checkOnly:true});
+  // All verified positions can be reconstructed from the durable job and
+  // physically read back. No CDN prefetch or import stage is needed.
+  const readRpc=createV3ReadbackRpc({eagleMcpUrl:cfg.eagleMcpUrl,libraryPath:app.libraryPath});
+  let postprocess=null,checked;
+  if(job?.slots?.length===receipt.images.length&&job.slots.every(s=>s.state==='verified')){
+    inspectPartialJournal(root,job,receipt.images,app.libraryPath,identity.url,legacyPlan);
+    const map=makeMap(id,job.slots.map(s=>({...s,verified:true})),{
+      libraryPath:app.libraryPath,folders:{main:folders.main,detail:folders.detail}});
+    const live=await readCurrentEagleProduct({rpc:readRpc,productId:id,images:receipt.images,productMap:map});
+    if(live.status!=='complete'||live.invalid.length||live.missing.length)
+      throw Error('Verified job originals no longer agree with live Eagle; no reimport');
+    postprocess={map,live};
+    checked={status:'ready_partial_recovery',protected:live.items.length,pending:0,
+      evidence:live.items.map(s=>({name:s.name,itemId:s.id,sha256:s.sha256,kind:'verified'}))};
+  }else checked=await processV3ImportedImages({...args,checkOnly:true});
   // Existing product mappings must agree with all previously verified source positions.
   for(const s of oldMap?.slots||[]){
     if(!s.itemId)continue;
@@ -67,25 +82,31 @@ try{
   }
   const preflight={productId:id,sourceCount:receipt.images.length,main:receipt.selected?.main,
     detail:receipt.selected?.detail,protected:checked.protected,pending:checked.pending,
-    receiptSha256:digest,originalReceiptModified:false};
+    receiptSha256:digest,originalReceiptModified:false,resumeStage:postprocess?'postprocess_only':'slot_recovery'};
   if(mode==='--check'){
     console.log(JSON.stringify({status:checked.status,...preflight,evidence:checked.evidence,eagleWrites:0},null,2));
   }else{
-    const imported=await processV3ImportedImages(args);
-    if(imported.status!=='verified'||imported.images.length!==receipt.images.length)
-      throw Error('Recovered import is not complete');
-    const readRpc=createV3ReadbackRpc({eagleMcpUrl:cfg.eagleMcpUrl,libraryPath:app.libraryPath});
-    const archive=await archiveEagleProduct({rpc:readRpc,productId:id,images:imported.images,
-      rootName:cfg.eagleArchiveRootName||ECOM_ARCHIVE_ROOT,apply:false});
-    if(archive.status!=='complete')throw Error('Archive not physically complete: '+archive.status);
-    const map=makeMap(id,imported.images,{libraryPath:app.libraryPath,
-      folders:{main:folders.main,detail:folders.detail}});
-    const current=await readCurrentEagleProduct({rpc:readRpc,productId:id,images:receipt.images,productMap:map});
+    let map,current,archive;
+    if(postprocess){
+      ({map,live:current}=postprocess);archive={status:'complete'};
+    }else{
+      const imported=await processV3ImportedImages(args);
+      if(imported.status!=='verified'||imported.images.length!==receipt.images.length)
+        throw Error('Recovered import is not complete');
+      archive=await archiveEagleProduct({rpc:readRpc,productId:id,images:imported.images,
+        rootName:cfg.eagleArchiveRootName||ECOM_ARCHIVE_ROOT,apply:false});
+      if(archive.status!=='complete')throw Error('Archive not physically complete: '+archive.status);
+      map=makeMap(id,imported.images,{libraryPath:app.libraryPath,
+        folders:{main:folders.main,detail:folders.detail}});
+      current=await readCurrentEagleProduct({rpc:readRpc,productId:id,images:receipt.images,productMap:map});
+    }
     if(current.status!=='complete'||current.invalid.length||current.missing.length)
       throw Error('Proposed recovered map not independently complete');
     saveMap(root,map);
     const mirrored=await mirrorEagleMap({rpc:readRpc,map,apply:true});
     if(mirrored.status!=='complete')throw Error('Cannot verify Eagle mapping mirror');
+    const delivery=await verifyDeliveryMode(current,receipt,registry,{apply:true});
+    if(delivery.status!=='complete')throw Error('Recorded storage-mode delivery incomplete');
     if(!process.env.STITCH_FFMPEG&&cfg.ffmpegExecutablePath)process.env.STITCH_FFMPEG=cfg.ffmpegExecutablePath;
     if(!process.env.STITCH_FFPROBE&&cfg.ffprobeExecutablePath)process.env.STITCH_FFPROBE=cfg.ffprobeExecutablePath;
     const stitch=await stitchEagleProduct({rpc:readRpc,productId:id,images:receipt.images,
@@ -96,7 +117,7 @@ try{
     if(stitch.status==='complete')indexSync=await syncV3StitchPartsToIndex({indexPath:args.indexPath,
       libraryPath:app.libraryPath,parts:stitch.parts,getById:eagleV2GetById,getLiveCount:visibleEagleItemCount});
     if(receiptDigest(readFileSync(file))!==digest)throw Error('Original receipt changed during recovery');
-    const report={status:'complete',...preflight,verified:imported.images.length,archive:archive.status,
+    const report={status:'complete',...preflight,verified:current.items.length,archive:archive.status,delivery,
       map:map.status,mirror:mirrored.status,longStatus:stitch.status,indexSync,
       registryNeedsVerifyLiveApply:true,at:new Date().toISOString()};
     const dir=join(root,'data','reconciliations');mkdirSync(dir,{recursive:true});

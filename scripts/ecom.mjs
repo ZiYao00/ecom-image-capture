@@ -2,6 +2,7 @@
 // One command surface for humans and Agents. JSON-only results; no implicit Eagle re-import.
 import {existsSync,readFileSync,writeFileSync} from 'node:fs';
 import {loopbackPortOccupied} from './browser-port.mjs';
+import {parseBatchOptions} from './batch-core.mjs';
 import {join,resolve,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
@@ -132,7 +133,7 @@ function doctor(){
   ]},report.readiness?.capture?0:10);
 }
 function capture(incoming,{scanOnly=false,resume=false,v3=false}={}){
-  if(v3&&config().v3Experimental!==true){emit({status:'v3_experimental_disabled',message:'Enable v3Experimental only for an approved controlled trial; normal capture remains V2.'},10);return}
+  if(v3&&(Number(process.versions.node.split('.')[0])<24||config().v3Experimental!==true)){emit({status:'v3_experimental_disabled',message:'Enable v3Experimental only for an approved controlled trial; normal capture remains V2.'},10);return}
  if(!incoming.length||incoming.length>2){emit({status:'invalid_arguments',usage:resume?'ecom resume <productId> [outputRoot]':'ecom capture "<full URL>" [outputRoot]'},2);return}
  const [target,dest]=incoming;
  if(resume&&!/^[0-9]{8,16}$/.test(target||'')){emit({status:'invalid_product_id'},2);return}
@@ -183,10 +184,20 @@ switch(command){
     else simple('v3-index.mjs',args,{operation:'v3-index',timeout:300000});break;
   case 'v3-prefetch':if(args.length!==2||!['--check','--cache'].includes(args[0])||!/^[0-9]{8,16}$/.test(args[1]))emit({status:'invalid_arguments',usage:'ecom v3-prefetch --check|--cache <existingProductId>'},2);
     else simple('v3-verify-prefetch.mjs',args,{operation:'v3-prefetch',timeout:300000});break;
-  case 'batch':if(args.length<1||args.length>2||
-     (args[1]&&!['--check','--apply'].includes(args[1])))
-    emit({status:'invalid_arguments',usage:'ecom batch <urls.txt|urls.json> [--check|--apply]'},2);
-   else simple('batch-capture.mjs',[args[1]||'--check',args[0]],{operation:'batch',timeout:3600000});break;
+  case 'source-closeout': {
+   const [name,mode,token]=args;
+   if(!['AA','BB'].includes(name)||!['--check','--prepare','--apply'].includes(mode)||
+      (mode==='--apply'?args.length!==3||!/^[a-f0-9-]{36}$/.test(token||''):args.length!==2))
+     emit({status:'invalid_arguments',usage:'ecom source-closeout AA|BB --check|--prepare | --apply <snapshotId>'},2);
+   else simple('source-closeout.mjs',args,{operation:'source-closeout',timeout:0});
+   break;
+  }
+  case 'batch': {
+   let parsed;try{parsed=parseBatchOptions(args)}catch(e){emit({status:'invalid_arguments',usage:'ecom batch <urls.txt|urls.json> [--check|--apply] [--engine v2|v3]',error:e.message},2);break}
+   // The queue owns bounded child operations; a second aggregate timeout could
+   // terminate the coordinator while a child still has an unresolved write.
+   simple('batch-capture.mjs',[parsed.file,parsed.mode,'--engine',parsed.engine],{operation:'batch',timeout:0});break;
+  }
   case 'recover-duplicates':if(args.length!==2||!/^[0-9]{8,16}$/.test(args[0])||
       !['--check','--apply'].includes(args[1]))
     emit({status:'invalid_arguments',usage:'ecom recover-duplicates <productId> --check|--apply'},2);
@@ -267,7 +278,8 @@ switch(command){
    'ecom industry --set <productId> <industryCode> <subcategoryCode> - manual-locked correction',
    'ecom industry --list [industryCode] - list stored classifications',
    'ecom capture-v3 "<full Tmall URL>" [outputRoot] - EXPERIMENTAL; disabled unless local config enables v3Experimental',
-  'ecom batch <urls.txt|urls.json> [--check|--apply] - serial multi-URL batch, no duplicate imports',
+  'ecom batch <urls.txt|urls.json> [--check|--apply] [--engine v2|v3] - serial verified queue; V3 requires local opt-in',
+   'ecom source-closeout AA|BB --check|--prepare | --apply <snapshotId> - preserve original IDs, unlink only snapshot sources',
    'ecom map-eagle <productId> --check|--apply - verify and mirror product-level order map',
    'ecom reconcile-reused <productId> --check|--apply - map proven reused source without new imports',
    'ecom verify-live <productId> --check|--apply - reconcile current Eagle archive and long image into registry',

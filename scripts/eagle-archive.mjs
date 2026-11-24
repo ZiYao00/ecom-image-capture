@@ -1,5 +1,6 @@
 // Eagle classification is a separate, readback-verified stage after item_add.
 import {statSync} from 'node:fs';
+import {requestEagle} from './eagle-request.mjs';
 import {locateEagleProductFolder,industryFolderName,isEcomRootName} from './eagle-folder-layout.mjs';
 const physicalFileExists=path=>{try{const s=statSync(path);return s.isFile()&&s.size>0}catch{return false}};
 // This module NEVER calls item_add and NEVER deletes or moves existing items.
@@ -16,14 +17,11 @@ export function archiveImageCategory(record) {
 }
 
 export async function eagleArchiveRpc(endpoint, name, args = {}, timeoutMs = 45000) {
-  const response = await fetch(endpoint, {
+  const raw = await requestEagle({endpoint,operation:name,timeoutMs,bodyType:'text',options:{
     method: 'POST',
     headers: {'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream'},
-    body: JSON.stringify({jsonrpc: '2.0', id: 1097, method: 'tools/call', params: {name, arguments: args}}),
-    signal: AbortSignal.timeout(timeoutMs)
-  });
-  if (!response.ok) throw Error('Eagle HTTP ' + response.status + ' (' + name + ')');
-  const raw = await response.text();
+    body: JSON.stringify({jsonrpc: '2.0', id: 1097, method: 'tools/call', params: {name, arguments: args}})
+  }});
   const line = raw.split(/\r?\n/).find(x => x.startsWith('data:'));
   const value = JSON.parse(line ? line.slice(5).trim() : raw);
   if (value.error || value.result?.isError) throw Error('Eagle ' + name + ' failed: ' + JSON.stringify(value.error || value.result).slice(0, 400));

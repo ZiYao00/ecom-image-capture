@@ -33,6 +33,7 @@ export const publicScripts = [
       'v3-fingerprint.mjs','v3-index.mjs','v3-prefetch.mjs','v3-verify-prefetch.mjs',
       'v3-job-state.mjs','v3-eagle-import.mjs','v3-web-readback.mjs','v3-resume-no-write.mjs',
       'v3-recovery-core.mjs','v3-resume-partial.mjs',
+      'eagle-request.mjs','copy-delivery.mjs','source-closeout-core.mjs','source-closeout.mjs',
        'industry-core.mjs','industry-eagle.mjs','industry-cli.mjs',
         'eagle-folder-layout.mjs','eagle-industry-move.mjs','industry-folder-cli.mjs'
 ];

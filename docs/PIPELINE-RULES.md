@@ -50,7 +50,7 @@ node scripts/ecom.mjs capture "<完整天猫URL>" "D:\素材"     # 用户指定
 - 正式采集的 Web API V2 只读来源为当前本机 Eagle 41595；MCP 41596 继续承担文件夹与关联写入，V3 的读回可以使用 V2 元数据加独立物理文件校验，避免仅因 MCP 搜索延迟判缺图。每个正式商品或恢复任务前刷新索引；入库前比对全库图片 ID、物理文件大小、修改时间和数量，后续每次写入前检查库数量，精确命中项独立复核 SHA-256；同数量替换也会阻断预检。资源库发生外部变化时不冒险导入。
 - 已通过 PC2 五商品真机试验：150 个逻辑位置完整、19 个位置完全复用 Eagle 原图，五张 750px 长图独立验证。仅当 V3 日志可证明零 Eagle 写入时允许使用 `ecom v3-resume --check|--apply <ID>`；原始回执不可重写，未知提交禁止重复调用。`ecom v3-resume-partial --check|--apply <ID> [原始完整URL]` 可恢复有提交历史的任务：V2 必须有可核对的提交前缀与显式未提交尾部；V3 必须有一致的独立事件日志。所有已提交位置先按真实 item ID、目标目录和 SHA-256 独立验证，只有明确未提交位置可新增写入。首次 V2 恢复提供原始完整 URL；只读预检通过后才执行。PC2 AA 实测 6/6 商品、301/301 位置、6/6 长图，其中 3 个 V2 历史任务保护 32 个既有位置、补齐 126 个未提交位置。
 - 指纹索引的库存数量统一使用 `/api/v2/item/get` 所报告的可见素材 `total`，不要混用语义不同的 `countAll`；每次 Eagle 长图上传成功后将经 SHA 校验的成品纳入同一索引。外部认证资料图片要与真实商家详情图区分；CDN 实际编码与 URL 扩展名不同时，只有多次有界预取均返回相同原始字节且 MIME 有效才允许使用并记录格式差异，禁止隐式转码。
-- V2 的 Eagle 分批导入发现任一批次不确定后立即停止后续批次，余下图片位置标为 `not_submitted_due_to_prior_uncertain_batch`，保留旧回执及其序号，不自动重试。未确认 V3 E2E 之前不可把 V3 改成默认生产采集流程。
+- V2 的 Eagle 分批导入发现任一批次不确定后立即停止后续批次，余下图片位置标为 `not_submitted_due_to_prior_uncertain_batch`，保留旧回执及其序号，不自动重试。PC2 新 V3 队列真实 E2E 已通过，仍需 PC1/独立环境及异常场景回归和用户决定后才可切换默认生产采集流程。
 
 ## 商品级行业分类独立阶段
 
@@ -74,11 +74,12 @@ node scripts/ecom.mjs capture "<完整天猫URL>" "D:\素材"     # 用户指定
 
 ## 批量采集与当前状态对账
 
-- `node scripts/ecom.mjs batch "链接清单.txt" --check`：UTF-8 每行完整 URL 或 JSON 字符串数组，最多 40 项；验证重复商品 ID 与已有回执，**只读**。
-- `node scripts/ecom.mjs batch "链接清单.txt" --apply`：逐单调用正式采集入口，每次提交意图写入独立 `data/batches/` 日志；共享服务故障、不明写入结果、验收失败或未知退出时立即熔断，后续商品记录 `not_started_due_to_batch_halt`；仅明确属于单商品扫描不完整且回执证明零 Eagle 写入的异常允许继续。**绝不重试已提交 Eagle 的商品，也不自动重采不完整回执**。
+- `node scripts/ecom.mjs batch "链接清单.txt" --check [--engine v2|v3]`：UTF-8 每行完整 URL 或 JSON 字符串数组，最多 40 项；验证重复商品 ID、SKU、已有回执和跨批次未决任务，**只读**。不同或不明确 SKU 进入待检查，不合并到已有商品目录。V2 默认；V3 须本机显式启用且 Node 24+。
+- `node scripts/ecom.mjs batch "链接清单.txt" --apply [--engine v2|v3]`：串行调度，持久化输入 SHA、引擎与各商品意图；V3 每个正式商品和受控恢复前刷新索引。仅在子进程正常退出、回执/事件日志支持并且只读恢复预检通过时，允许一次逐位置恢复，不再运行原 capture。已完成同 SKU 商品也先现场验收。跨批次未决写入、活跃/未知商品锁、共享服务故障、未知退出和验收失败熔断；后续标记 `not_started_due_to_batch_halt`。多个未决任务时先独立安全恢复，不跳过障碍。读取重查仅限已知只读 API 的瞬态网络及 HTTP 错误，总预算内最多三次；Eagle 写入一律单次，保留请求操作、路由、阶段、超时与底层 cause。批次外层不再叠加固定一小时超时，子流程预算分别 600s/900s/240s/310s，宿主中断仍须检查持久化日志及实际进程。PC2 BB 两批 4 个新商品真实执行均完成：161 个位置、4 张长图；首个商品因 FFprobe 超时自动进入 postprocess_only，保持原图及原回执并成功补齐长图。两次遇到活跃批次锁时检查到同一批次正在执行，未重发；最终批次锁均正常释放。
 - 新商品页面导航后 Chrome 执行上下文临时失效时，仅在原商品标签页进行有限次数 `evaluate_script` 重查；不重新打开商品、不重复提交 Eagle。
 - `node scripts/ecom.mjs recover-duplicates <ID> --check|--apply`：**独立显式操作**，仅对 Eagle 部分验证且已有合规本地补图、数量不超过 10 的商品；核验 Eagle 全库完全相同的 SHA-256、旧提交 itemId 物理缺失、GIF 帧数/时序和像素后才可生成不同文件哈希的副本并单张回存。若提交结果不明确，保留独立日志停止，不自动重试。仅支持可证明无损处理的格式。
-- `node scripts/ecom.mjs verify-live <ID> --check|--apply`：重新验证 Eagle 原始素材与长图实体、尺寸和 SHA-256。只有完整才更新本地 `captures.json` 的最新完成状态；**历史 receipt 不改写**。
+- `node scripts/ecom.mjs verify-live <ID> --check|--apply`：重新验证 Eagle 原始素材与长图实体、尺寸和 SHA-256，并按原回执/登记的存储模式验收；copy 模式还须本地编号图片哈希和离线 HTML 一致。只有完整才更新本地 `captures.json` 的最新完成状态；**历史 receipt 不改写**。
+- `source-closeout AA|BB --check|--prepare` 分别只读检查/保存本机快照；`--apply <snapshotId>` 仅对快照中已独立验收的来源项增加目标关联并解除指定来源关联，记录逐项 intent/readback。目录名大小写不敏感且必须唯一，实际 ID 不变；未确认、未入快照或后续新增的项保留。禁止删除原文件或重复不明关联写入。PC2 BB 非空文件夹实测 4 个来源项已具备目标关联，解除来源关联后逐项核实原 ID、SHA-256、目标关联与商品交付，剩余 0 项。
 
 ## 产物结构
 
