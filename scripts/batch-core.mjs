@@ -52,7 +52,7 @@ export function parseBatchOptions(args){
  }
  return {file:args[0],mode,engine};
 }
-export const BATCH_BUDGETS=Object.freeze({capture:600000,recovery:900000,read:240000,index:310000});
+export const BATCH_BUDGETS=Object.freeze({capture:600000,recovery:2400000,read:240000,index:310000});
 // Only old persisted attempts/jobs can block a later batch; unrelated legacy
 // receipts are not globally reclassified by this queue.
 export function collectBatchBarriers({journals=[],jobs=[],products={}}={}){
@@ -111,15 +111,10 @@ export function runBatchQueue({entries,engine='v2',classify,barriers,run,saveRow
    if(!attempt.ok&&engine==='v3'&&canAutoRecover(attempt)&&canRecover(entry)){
     // The recovery command itself must prove every submitted slot by readback.
     // One bounded recovery path, not a repeat of capture/item_add.
-    const indexed=refreshIndex();
-    if(indexed.ok){
-     saveRow(entry,{status:'invoking_recovery',captureError:attempt.error});
+    saveRow(entry,{status:'invoking_recovery',captureError:attempt.error});
      attempt=run('recover',entry);
-    }
    }
   }else if(state==='skipped_existing_needs_review'&&engine==='v3'&&canRecover(entry)){
-   const indexed=refreshIndex();
-   if(!indexed.ok){fail(entry,'needs_read_only_recovery',{error:indexed.error||'Index refresh blocked'});continue}
    saveRow(entry,{status:'invoking_recovery'});
    attempt=run('recover',entry);
   }else{
@@ -134,7 +129,7 @@ export function runBatchQueue({entries,engine='v2',classify,barriers,run,saveRow
    fail(entry,status,{error:attempt?.error||'Capture or recovery did not complete'});continue;
   }
   saveRow(entry,{status:'invoking_finalize'});
-  const verified=verifyDelivery(entry,{apply:attempt.recovered===true});
+  const verified=verifyDelivery(entry,{apply:attempt.recovered===true&&!attempt.finalized});
   if(!verified.ok){fail(entry,'needs_read_only_recovery',{error:verified.error||'Independent verification failed'});continue}
   finish(entry,'complete',{verification:verified.result});
  }

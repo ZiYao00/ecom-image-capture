@@ -47,7 +47,7 @@ export function findProductArchive(roots,productId,{rootName=null}={}){
   return{rootName:archiveName,rootId,productId:pid,productFolderId,
     mainFolderId,detailFolderId,parentId,industryCode,industryName};
 }
-export async function hashEagleFile(item) {
+export function verifyEaglePhysicalFile(item) {
   if(!item?.id || typeof item.filePath!=='string'||!item.filePath)
     throw Error('Eagle item missing physical path or ID');
   const full=realpathSync(item.filePath);
@@ -57,9 +57,13 @@ export async function hashEagleFile(item) {
     throw Error('Eagle source path does not belong to its itemId: '+item.name);
   const st=statSync(full);
   if(!st.isFile()||st.size===0)throw Error('Eagle image empty or not a file '+item.name);
+  return {filePath:full,bytes:st.size};
+}
+export async function hashEagleFile(item) {
+  const physical=verifyEaglePhysicalFile(item);
   const hash=createHash('sha256');
-  for await (const chunk of createReadStream(full)) hash.update(chunk);
-  return {filePath:full,bytes:st.size,sha256:hash.digest('hex')};
+  for await (const chunk of createReadStream(physical.filePath)) hash.update(chunk);
+  return {...physical,sha256:hash.digest('hex')};
 }
 export async function listFolderItems(rpc,id) {
   if(!id)return [];

@@ -8,7 +8,9 @@ import{randomUUID}from'node:crypto';
 import{acquireProductLock,readRegistry}from'./capture-store.mjs';
 import{verifyDeliveryMode}from'./copy-delivery.mjs';
 import{loadJob,assertNoWriteResume}from'./v3-job-state.mjs';
-import{visibleEagleItemCount,openFingerprintDatabase,syncV3StitchPartsToIndex,assertFingerprintInventory}from'./v3-fingerprint.mjs';
+import {holdWorkflowLock} from './workflow-lock.mjs';
+import {assertIndustryMigrationNotActive} from './eagle-industry-move.mjs';
+import{visibleEagleItemCount,openFingerprintDatabase,syncV3StitchPartsToIndex,assertFingerprintInventory,refreshFingerprintIndex,listWebApiItems}from'./v3-fingerprint.mjs';
 import{processV3ImportedImages,eagleV2GetById}from'./v3-eagle-import.mjs';
 import{eagleArchiveRpc,ensureEagleProductFolders,archiveEagleProduct,ECOM_ARCHIVE_ROOT}from'./eagle-archive.mjs';
 import{createV3ReadbackRpc}from'./v3-web-readback.mjs';
@@ -22,6 +24,7 @@ if(!['--check','--apply'].includes(mode)||!/^[0-9]{8,16}$/.test(id||'')||process
  throw Error('Usage: node scripts/v3-resume-no-write.mjs --check|--apply <productId>');
 const cfg=JSON.parse(readFileSync(join(root,'config','local.json'),'utf8'));
 if(cfg.v3Experimental!==true)throw Error('V3 experimental mode disabled');
+holdWorkflowLock(root);assertIndustryMigrationNotActive(root);
 const receiptFile=join(root,'data','runs','stable-'+id,'receipt.json');
 if(!existsSync(receiptFile))throw Error('No stable V3 original receipt');
 const receipt=JSON.parse(readFileSync(receiptFile,'utf8'));
@@ -54,7 +57,16 @@ try{
  const imported=await processV3ImportedImages({root,productId:id,url,images:receipt.images,
    libraryPath:app.libraryPath,folderIds:folders,indexPath,resumeNoWrite:true,
    linkFolders:(ids,fids)=>rpc('item_add_to_folders',{ids,folders:fids}),
-   checkLibrary:visibleEagleItemCount,checkInventory:assertFingerprintInventory});
+   checkLibrary:async()=>{
+      const current=await rpc('get_app_info',{});
+      if(!current?.libraryPath||resolve(current.libraryPath).toLowerCase()!==resolve(app.libraryPath).toLowerCase())throw Error('Active Eagle library identity changed');
+      return visibleEagleItemCount();
+    },checkInventory:assertFingerprintInventory,
+    refreshInventory:(index,path)=>refreshFingerprintIndex(index,path,{listItems:async()=>{
+      const current=await rpc('get_app_info',{});
+      if(!current?.libraryPath||resolve(current.libraryPath).toLowerCase()!==resolve(path).toLowerCase())throw Error('Active Eagle library identity changed');
+      return listWebApiItems();
+    }})});
  if(imported.status!=='verified'||imported.images.length!==receipt.images.length)
    throw Error('Incomplete V3 import result');
  const readRpc=createV3ReadbackRpc({eagleMcpUrl:cfg.eagleMcpUrl,libraryPath:app.libraryPath});

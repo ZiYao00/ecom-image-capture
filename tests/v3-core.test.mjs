@@ -4,7 +4,7 @@ import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,existsSync} from 'node:
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
-import {listWebApiItems,makeIndexRows,openFingerprintDatabase,chooseExactMatch,visibleEagleItemCount,syncV3StitchPartsToIndex} from '../scripts/v3-fingerprint.mjs';
+import {listWebApiItems,makeIndexRows,openFingerprintDatabase,chooseExactMatch,visibleEagleItemCount,syncV3StitchPartsToIndex,refreshFingerprintIndex,assertFingerprintInventory} from '../scripts/v3-fingerprint.mjs';
 import {BROWSER_IMAGE_HEADERS,fetchOriginalBytes,validateOriginalRepresentation,saveCacheFile,prefetchOriginalRepresentation} from '../scripts/v3-prefetch.mjs';
 import {nextState,maySubmitSlot,needsOnlyReadback,createJob,createStoredJob,recordJobEvent,loadJob,acquireLibraryLock} from '../scripts/v3-job-state.mjs';
 import {resolveV3ExactMatch,eagleV2GetById,eagleV2AddFromPath} from '../scripts/v3-eagle-import.mjs';
@@ -173,4 +173,48 @@ test('V3 Web API add is single attempt, and requires a real returned ID',async()
 test('V3 Web API get requires exact returned item ID',async()=>{
   const out=await eagleV2GetById(id,{fetchFn:async()=>({ok:true,json:async()=>({status:'success',data:{data:[{id:'OTHER'}],total:1}})})});
   assert.equal(out,null);
+});
+
+sqliteTest('incremental index reuses unchanged physical signatures and hashes only added/changed files',async()=>{
+ const root=fakeRoot(),one=fixture(root),two=fixture(root,{itemId:'SECOND123456'});
+ let live=[one,two];const db=await openFingerprintDatabase(':memory:',{libraryPath:root});
+ const listItems=async()=>({total:live.length,items:live});
+ try{
+   const first=await refreshFingerprintIndex(db,root,{listItems});assert.equal(first.hashed,2);assert.equal(first.reused,0);
+   const second=await refreshFingerprintIndex(db,root,{listItems});assert.equal(second.hashed,0);assert.equal(second.reused,2);
+   const three=fixture(root,{itemId:'THIRD1234567',content:Buffer.concat([jpg,Buffer.from([42])])});
+   live=[one,three]; // same total, different identity
+   await assert.rejects(()=>assertFingerprintInventory(db,root,{listItems}),/identity|inventory/);
+   const replaced=await refreshFingerprintIndex(db,root,{listItems});
+   assert.equal(replaced.hashed,1);assert.equal(replaced.reused,1);assert.equal(replaced.removed,1);
+   assert.equal(db.inventory().some(x=>x.id===two.id),false);
+   await assertFingerprintInventory(db,root,{listItems});
+   fixture(root,{itemId:one.id,content:Buffer.concat([jpg,Buffer.from([43])])});
+   const changed=await refreshFingerprintIndex(db,root,{listItems});assert.equal(changed.hashed,1);assert.equal(changed.reused,1);
+ }finally{db.close();}
+});
+sqliteTest('index refresh never publishes a partial generation on unstable inventory',async()=>{
+ const root=fakeRoot(),one=fixture(root),two=fixture(root,{itemId:'SECOND123456'});
+ const db=await openFingerprintDatabase(':memory:',{libraryPath:root});
+ try{
+   await refreshFingerprintIndex(db,root,{listItems:async()=>({total:1,items:[one]})});
+   const generation=db.info().activeGeneration;let calls=0;
+   await assert.rejects(()=>refreshFingerprintIndex(db,root,{attempts:2,listItems:async()=>{
+      const items=++calls%2?[one]:[two];return{total:1,items};
+   }}),/inventory changed/);
+   assert.equal(calls,4);assert.equal(db.info().activeGeneration,generation);
+   assert.deepEqual(db.inventory().map(x=>x.id),[one.id]);
+ }finally{db.close();}
+});
+sqliteTest('old index signatures require rehash and folder-only changes do not rehash',async()=>{
+ const root=fakeRoot(),one=fixture(root),db=await openFingerprintDatabase(':memory:',{libraryPath:root});
+ try{
+   const records=await makeIndexRows(root,[one]);db.writeGeneration(records.rows.map(x=>({...x,signature:null})),{libraryItemTotal:1});
+   const listItems=async()=>({total:1,items:[one]});
+   await assert.rejects(()=>assertFingerprintInventory(db,root,{listItems}),/physical metadata changed/);
+   const migrated=await refreshFingerprintIndex(db,root,{listItems});assert.equal(migrated.hashed,1);
+   one.folders=['NEW_FOLDER'];
+   const next=await refreshFingerprintIndex(db,root,{listItems});assert.equal(next.hashed,0);assert.equal(next.reused,1);
+   assert.deepEqual(db.inventory()[0].folders,['NEW_FOLDER']);
+ }finally{db.close();}
 });

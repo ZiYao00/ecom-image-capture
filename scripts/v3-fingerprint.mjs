@@ -71,28 +71,53 @@ export async function sha256File(path){
   return hash.digest('hex');
 }
 
+// Include the physical identity and change timestamps, not only item count.
+// A previous schema row without this signature is deliberately rehashed once.
+export function physicalSignature(physical){
+  const st=statSync(physical.filePath);
+  return JSON.stringify([physical.name,physical.ext,physical.width,physical.height,
+    st.size,st.mtimeMs,st.ctimeMs,st.birthtimeMs,st.dev,st.ino]);
+}
 export async function inspectIndexedItem(libraryPath,item) {
   const physical=physicalImagePath(libraryPath,item);
   if(!physical)return null;
-  return {id:item.id,sha256:await sha256File(physical.filePath),size:physical.bytes,
+  const signature=physicalSignature(physical),sha256=await sha256File(physical.filePath);
+  const after=physicalImagePath(libraryPath,item);
+  if(!after||after.filePath!==physical.filePath||physicalSignature(after)!==signature)
+    throw Error('Image changed during fingerprint hashing: '+item.id);
+  return {id:item.id,sha256,size:physical.bytes,
     ext:physical.ext,width:physical.width,height:physical.height,
-    name:physical.name,mtime:statSync(physical.filePath).mtimeMs,
+    name:physical.name,mtime:statSync(physical.filePath).mtimeMs,signature,
     folders:Array.isArray(item.folders)?item.folders:[],filePath:physical.filePath};
 }
 
-export async function makeIndexRows(libraryPath,items,{maxInspect=null,onProgress=null}={}) {
+export async function makeIndexRows(libraryPath,items,{maxInspect=null,onProgress=null,previousRows=[]}={}) {
   const rows=[],invalid=[],skipped=[];
+  const previous=new Map(previousRows.map(x=>[x.id,x]));
+  let reused=0,hashed=0;
   const eligible=items.filter(imageItem);
   const selected=Number.isInteger(maxInspect)?eligible.slice(0,maxInspect):eligible;
+  const eligibleIds=new Set(eligible.map(x=>x.id));
   for(let index=0;index<selected.length;index++){
     const item=selected[index];
     try{
-      const row=await inspectIndexedItem(libraryPath,item);
-      if(row)rows.push(row);else invalid.push(item.id);
+      const physical=physicalImagePath(libraryPath,item);
+      if(!physical){invalid.push(item.id);continue;}
+      const old=previous.get(item.id),signature=physicalSignature(physical);
+      if(old?.signature===signature&&/^[a-f0-9]{64}$/.test(old.sha256||'')){
+        rows.push({...old,name:physical.name,ext:physical.ext,width:physical.width,
+          height:physical.height,size:physical.bytes,mtime:statSync(physical.filePath).mtimeMs,
+          signature,filePath:physical.filePath,folders:Array.isArray(item.folders)?item.folders:[]});
+        reused++;
+      }else{
+        const row=await inspectIndexedItem(libraryPath,item);
+        if(row){rows.push(row);hashed++;}else invalid.push(item.id);
+      }
     }catch(error){invalid.push(item.id+': '+String(error.message||error).slice(0,80))}
     if(typeof onProgress==='function'&&(index+1)%100===0)onProgress({inspected:index+1,total:selected.length});
   }
-  return {rows,invalid,skipped:items.length-eligible.length,inspected:selected.length,eligible:eligible.length};
+  return {rows,invalid,skipped:items.length-eligible.length,inspected:selected.length,eligible:eligible.length,
+    reused,hashed,removed:previousRows.filter(x=>!eligibleIds.has(x.id)).length};
 }
 
 export async function openFingerprintDatabase(file,{libraryPath}={}) {
@@ -105,6 +130,8 @@ export async function openFingerprintDatabase(file,{libraryPath}={}) {
   db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
   db.exec('CREATE TABLE IF NOT EXISTS images (item_id TEXT PRIMARY KEY, sha256 TEXT NOT NULL, size INTEGER NOT NULL, ext TEXT NOT NULL, name TEXT NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL, mtime REAL NOT NULL, folders TEXT NOT NULL, generation TEXT NOT NULL)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_v3_images_hash ON images(sha256, generation)');
+  if(!db.prepare('PRAGMA table_info(images)').all().some(x=>x.name==='signature'))
+    db.exec('ALTER TABLE images ADD COLUMN signature TEXT');
   const stored=db.prepare('SELECT value FROM meta WHERE key=?').get('libraryPath')?.value;
   if(stored&&libraryPath&&stored.toLowerCase()!==resolve(libraryPath).toLowerCase()){
     db.close();throw Error('V3 index is bound to a different Eagle library');
@@ -115,7 +142,7 @@ export async function openFingerprintDatabase(file,{libraryPath}={}) {
     info:()=>Object.fromEntries(db.prepare('SELECT key,value FROM meta').all().map(x=>[x.key,x.value])),
     inventory:()=>{
       const generation=db.prepare('SELECT value FROM meta WHERE key=?').get('activeGeneration')?.value;
-      return generation?db.prepare('SELECT item_id AS id,size,mtime FROM images WHERE generation=? ORDER BY item_id').all(generation):[];
+      return generation?db.prepare('SELECT item_id AS id,sha256,size,ext,name,width,height,mtime,folders,signature FROM images WHERE generation=? ORDER BY item_id').all(generation).map(x=>({...x,folders:JSON.parse(x.folders)})):[];
     },
     lookup:(sha256)=>{
       const generation=db.prepare('SELECT value FROM meta WHERE key=?').get('activeGeneration')?.value;
@@ -130,16 +157,16 @@ export async function openFingerprintDatabase(file,{libraryPath}={}) {
       const generation=db.prepare('SELECT value FROM meta WHERE key=?').get('activeGeneration')?.value;
       if(!generation||!/^[a-f0-9]{64}$/.test(row?.sha256||'')||!row.id)
         throw Error('Cannot add unverified image to V3 index');
-      const stmt=db.prepare('INSERT INTO images(item_id,sha256,size,ext,name,width,height,mtime,folders,generation) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET sha256=excluded.sha256,size=excluded.size,ext=excluded.ext,name=excluded.name,width=excluded.width,height=excluded.height,mtime=excluded.mtime,folders=excluded.folders,generation=excluded.generation');
-      stmt.run(row.id,row.sha256,row.size,row.ext,row.name,row.width,row.height,row.mtime,JSON.stringify(row.folders||[]),generation);
+      const stmt=db.prepare('INSERT INTO images(item_id,sha256,size,ext,name,width,height,mtime,folders,generation,signature) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET sha256=excluded.sha256,size=excluded.size,ext=excluded.ext,name=excluded.name,width=excluded.width,height=excluded.height,mtime=excluded.mtime,folders=excluded.folders,generation=excluded.generation,signature=excluded.signature');
+      stmt.run(row.id,row.sha256,row.size,row.ext,row.name,row.width,row.height,row.mtime,JSON.stringify(row.folders||[]),generation,row.signature||null);
     },
     writeGeneration:(rows,{libraryItemTotal=null}={})=>{
       const generation=randomUUID();
-      const insert=db.prepare('INSERT INTO images(item_id,sha256,size,ext,name,width,height,mtime,folders,generation) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET sha256=excluded.sha256,size=excluded.size,ext=excluded.ext,name=excluded.name,width=excluded.width,height=excluded.height,mtime=excluded.mtime,folders=excluded.folders,generation=excluded.generation');
+      const insert=db.prepare('INSERT INTO images(item_id,sha256,size,ext,name,width,height,mtime,folders,generation,signature) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET sha256=excluded.sha256,size=excluded.size,ext=excluded.ext,name=excluded.name,width=excluded.width,height=excluded.height,mtime=excluded.mtime,folders=excluded.folders,generation=excluded.generation,signature=excluded.signature');
       const meta=db.prepare('INSERT INTO meta(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');
       db.exec('BEGIN IMMEDIATE');
       try{
-        for(const row of rows)insert.run(row.id,row.sha256,row.size,row.ext,row.name,row.width,row.height,row.mtime,JSON.stringify(row.folders),generation);
+        for(const row of rows)insert.run(row.id,row.sha256,row.size,row.ext,row.name,row.width,row.height,row.mtime,JSON.stringify(row.folders),generation,row.signature||null);
         if(libraryPath)meta.run('libraryPath',resolve(libraryPath));
         meta.run('activeGeneration',generation);
         meta.run('indexedCount',String(rows.length));
@@ -162,10 +189,46 @@ export async function assertFingerprintInventory(index,libraryPath,{listItems=li
     throw Error('Eagle inventory differs from active fingerprint generation; rebuild before writes');
   for(const item of eligible){
     const row=indexed.get(item.id),physical=physicalImagePath(libraryPath,item);
-    if(!row||!physical||physical.bytes!==row.size||statSync(physical.filePath).mtimeMs!==row.mtime)
+    if(!row||!physical||!row.signature||physicalSignature(physical)!==row.signature)
       throw Error('Eagle inventory identity or physical metadata changed: '+item.id+'; rebuild before writes');
   }
   return {status:'current',total:live.total,eligible:eligible.length};
+}
+
+// Compare the complete inventory twice before activating a new generation.
+// Incremental reuse is based on unchanged physical identity; every exact hash
+// candidate is still independently rehashed before reuse in the import path.
+export async function refreshFingerprintIndex(index,libraryPath,{listItems=listWebApiItems,full=false,attempts=2}={}){
+  if(!Number.isInteger(attempts)||attempts<1||attempts>3)throw Error('Invalid refresh attempt bound');
+  let failure;
+  for(let attempt=1;attempt<=attempts;attempt++){
+    try{
+      const first=await listItems();
+      const inspected=await makeIndexRows(libraryPath,first.items,{previousRows:full?[]:index.inventory()});
+      if(inspected.invalid.length)throw Error('Eagle image sources unavailable: '+inspected.invalid.slice(0,5).join(','));
+      const last=await listItems(),byId=new Map(inspected.rows.map(x=>[x.id,x]));
+      const firstIds=new Set(first.items.map(x=>x.id));
+      if(first.total!==last.total||firstIds.size!==last.items.length||
+         last.items.some(x=>!firstIds.has(x.id))||last.items.filter(imageItem).length!==byId.size)
+        throw Error('Eagle inventory changed during fingerprint refresh');
+      for(const item of last.items.filter(imageItem)){
+        const row=byId.get(item.id),physical=physicalImagePath(libraryPath,item);
+        if(!row||!physical||physicalSignature(physical)!==row.signature)
+          throw Error('Eagle physical inventory changed during fingerprint refresh: '+item.id);
+        row.folders=Array.isArray(item.folders)?item.folders:[];
+      }
+      const generation=index.writeGeneration(inspected.rows,{libraryItemTotal:last.total});
+      return {status:'index_ready',generation,libraryItemTotal:last.total,indexable:inspected.rows.length,
+        imageEligible:inspected.eligible,inspected:inspected.inspected,unavailableCount:0,unavailable:[],
+        ignoredNonImages:inspected.skipped,reused:inspected.reused,hashed:inspected.hashed,
+        removed:inspected.removed,attempts:attempt,dbModified:true};
+    }catch(error){failure=error;
+      // Only retry read-only inventory drift. A database write or source failure
+      // is not automatically repeated, and no incomplete generation is published.
+      if(!/inventory changed|changed during enumeration|changed during fingerprint refresh/i.test(String(error.message||error)))throw error;
+    }
+  }
+  throw failure;
 }
 
 export async function syncV3StitchPartsToIndex({indexPath,libraryPath,parts,getById,getLiveCount}={}){

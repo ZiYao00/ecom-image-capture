@@ -27,6 +27,11 @@ export async function importEagleInBatches(images,{add,read,exists,record=()=>{}
     batch.status='acknowledged';await record(structuredClone(batch));
     const matched=await verifyEagleReadback(group,rows,read,{delays});
     batch.readbackAttempts=matched.attempts;
+    // Metadata is not physical verification. Route ghost paths through reuse proof.
+    const physicallyMissing=new Set();
+    for(const r of matched.records)if(r.verified&&!exists(r.filePath,r)){
+      r.verified=false;r.materialStatus='missing_physical_file';physicallyMissing.add(r.name);
+    }
     const reuse=resolveReused?await resolveReused({
       group,submitted:rows,records:matched.records,unverified:matched.records.filter(x=>!x.verified),batchIndex:batch.index
     }):{resolved:[],unresolved:[]};
@@ -34,10 +39,13 @@ export async function importEagleInBatches(images,{add,read,exists,record=()=>{}
     batch.reused=resolved.size;
     for(const original of matched.records){
       const result=resolved.get(original.name)||original;
-      if(result.verified && !exists(result.filePath)){
+      if(result.verified && !exists(result.filePath,result)){
         result.verified=false;result.materialStatus='missing_physical_file';
         batch.issues.push('Eagle material missing: '+result.name);
       }
+      if(!result.verified&&physicallyMissing.has(result.name)&&
+         !batch.issues.includes('Eagle material missing: '+result.name))
+        batch.issues.push('Eagle material missing: '+result.name);
       records.push(result);
     }
     const confirmed=[...resolved.values()].filter(x=>x.verified);

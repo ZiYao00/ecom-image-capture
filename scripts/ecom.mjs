@@ -180,7 +180,9 @@ switch(command){
     else simple('v3-resume-no-write.mjs',args,{operation:'v3-resume',timeout:540000});break;
   case 'v3-resume-partial':if(args.length<2||args.length>3||!['--check','--apply'].includes(args[0])||!/^[0-9]{8,16}$/.test(args[1]))emit({status:'invalid_arguments',usage:'ecom v3-resume-partial --check|--apply <productId> [originalTmallUrl]'},2);
     else simple('v3-resume-partial.mjs',args,{operation:'v3-resume-partial',timeout:840000});break;
-  case 'v3-index':if(args.length<1||args.length>2||!['--check','--build'].includes(args[0]))emit({status:'invalid_arguments',usage:'ecom v3-index --check [count]|--build'},2);
+  case 'recover':if(args.length<2||args.length>3||!['--check','--apply'].includes(args[0])||!/^[0-9]{8,16}$/.test(args[1]))emit({status:'invalid_arguments',usage:'ecom recover --check|--apply <productId> [originalTmallUrl]'},2);
+     else simple('recover-product.mjs',args,{operation:'recover',timeout:0});break;
+   case 'v3-index':if(args.length<1||args.length>2||!['--check','--build','--full'].includes(args[0]))emit({status:'invalid_arguments',usage:'ecom v3-index --check [count]|--build|--full'},2);
     else simple('v3-index.mjs',args,{operation:'v3-index',timeout:300000});break;
   case 'v3-prefetch':if(args.length!==2||!['--check','--cache'].includes(args[0])||!/^[0-9]{8,16}$/.test(args[1]))emit({status:'invalid_arguments',usage:'ecom v3-prefetch --check|--cache <existingProductId>'},2);
     else simple('v3-verify-prefetch.mjs',args,{operation:'v3-prefetch',timeout:300000});break;
@@ -267,7 +269,8 @@ switch(command){
   'ecom setup [--check]  - install local dependencies, initialize, start Chrome, check Eagle',
   'ecom doctor           - read-only environment diagnosis',
   'ecom capture "<full Tmall URL>" [outputRoot]',
-   'ecom v3-index --check [count]|--build - inspect/build local Eagle SHA-256 index',
+   'ecom v3-index --check [count]|--build|--full - inspect / incremental refresh / full local Eagle SHA-256 index',
+   'ecom recover --check|--apply <productId> [originalTmallUrl] - explicit evidence-driven recovery; never replay prior submissions',
    'ecom v3-prefetch --check|--cache <existingProductId> - test exact-byte CDN fetch without Eagle writes',
    'ecom v3-resume --check|--apply <productId> - only when event ledger proves zero Eagle writes',
    'ecom v3-resume-partial --check|--apply <productId> [originalTmallUrl] - protect submitted slots, import only proven unsubmitted originals',

@@ -68,7 +68,7 @@ export async function resolveV3ExactMatch({index,sha256,folderId,getById,library
 
 export async function processV3ImportedImages({root,productId,url,images,libraryPath,folderIds,
   indexPath,getById=eagleV2GetById,importLocal=eagleV2AddFromPath,
-  linkFolders,fetchImage=prefetchOriginalRepresentation,checkLibrary=null,checkInventory=null,
+  linkFolders,fetchImage=prefetchOriginalRepresentation,checkLibrary=null,checkInventory=null,refreshInventory=null,
   resumeNoWrite=false,resumePartial=false,legacyPlan=null,checkOnly=false}={}){
   if(!root||!libraryPath||!url||!Array.isArray(images)||!images.length||
      !folderIds?.main||!folderIds?.detail||typeof linkFolders!=='function')
@@ -79,7 +79,7 @@ export async function processV3ImportedImages({root,productId,url,images,library
   try {
     const indexInfo=index.info();
     if(!indexInfo.activeGeneration)throw Error('V3 fingerprint index has no verified generation');
-    let expectedLibraryTotal=Number(indexInfo.libraryItemTotal);
+    let expectedLibraryTotal=Number(indexInfo.libraryItemTotal),activeGeneration=indexInfo.activeGeneration,refreshes=0;
     if(!Number.isInteger(expectedLibraryTotal)||expectedLibraryTotal<0||typeof checkLibrary!=='function')
       throw Error('V3 needs a current full-library index and read-only count verifier');
     const recoveryMode=!!legacyPlan||resumePartial;
@@ -103,10 +103,26 @@ export async function processV3ImportedImages({root,productId,url,images,library
       return proveProtectedSlot({slot,proof,index,folderId:folderIds[slot.category],
         getById,libraryPath,verifyById:verifyEagleById,validateCandidate:validateEagleCandidate});
     }
-    async function guardInventory(){
-      if(await checkLibrary()!==expectedLibraryTotal)
-        throw Error('Eagle library changed since fingerprint indexing; safely stop before any new item_add');
-      if(checkInventory)await checkInventory(index,libraryPath);
+    async function guardInventory({allowRefresh=false}={}){
+      const check=async()=>{
+        if(index.info().activeGeneration!==activeGeneration)throw Error('Eagle fingerprint generation changed during operation');
+        if(await checkLibrary()!==expectedLibraryTotal)
+          throw Error('Eagle library changed since fingerprint indexing; safely stop before any new item_add');
+        if(checkInventory)await checkInventory(index,libraryPath);
+      };
+      try{await check();}
+      catch(error){
+        const drift=/library changed since fingerprint indexing|inventory differs|inventory identity or physical metadata changed/.test(String(error.message||error));
+        if(!allowRefresh||!drift||refreshes||typeof refreshInventory!=='function')throw error;
+        // One incremental refresh, only before the first new import/link phase.
+        // Prior protected positions are subsequently re-proved by exact bytes.
+        refreshes++;
+        const refreshed=await refreshInventory(index,libraryPath);
+        if(refreshed?.status!=='index_ready')throw Error('Incremental inventory refresh did not complete');
+        const info=index.info();activeGeneration=info.activeGeneration;expectedLibraryTotal=Number(info.libraryItemTotal);
+        await check();
+        recordJobEvent(root,job,{event:'prewrite_inventory_refreshed',metadata:{generation:activeGeneration,libraryItemTotal:expectedLibraryTotal}});
+      }
     }
     if(checkOnly){
       await guardInventory();
@@ -187,7 +203,7 @@ export async function processV3ImportedImages({root,productId,url,images,library
     }
     // Verify the full inventory and every previously submitted slot BEFORE any new write.
     // Even an unresolved historical/uncertain slot stops the entire product.
-    if(checkInventory||recoveryMode)await guardInventory();
+    if(checkInventory||recoveryMode)await guardInventory({allowRefresh:true});
     for(const slot of job.slots){
       const key=slot.category+':'+slot.order,proof=protectedMap.get(key);
       if(!proof)continue;
@@ -215,6 +231,7 @@ export async function processV3ImportedImages({root,productId,url,images,library
       const release=acquireLibraryLock(root,libraryPath);
       const folderId=folderIds[slot.category];
       try{
+        if(index.info().activeGeneration!==activeGeneration)throw Error('Eagle fingerprint generation changed during operation');
         const actualCount=await checkLibrary();
         if(actualCount!==expectedLibraryTotal)throw Error('Eagle library changed since fingerprint indexing; safely stop before any new item_add');
         const match=await resolveV3ExactMatch({index,sha256:slot.sha256,folderId,getById,libraryPath});

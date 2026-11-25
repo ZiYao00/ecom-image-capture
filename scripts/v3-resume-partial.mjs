@@ -7,9 +7,10 @@ import {randomUUID} from 'node:crypto';
 import {acquireProductLock,canonicalProductUrl,readRegistry} from './capture-store.mjs';
 import {assertIndustryMigrationNotActive} from './eagle-industry-move.mjs';
 import {loadJob} from './v3-job-state.mjs';
+import {holdWorkflowLock} from './workflow-lock.mjs';
 import {buildLegacyRecoveryPlan,receiptDigest,inspectPartialJournal} from './v3-recovery-core.mjs';
 import {verifyDeliveryMode} from './copy-delivery.mjs';
-import {visibleEagleItemCount,assertFingerprintInventory,syncV3StitchPartsToIndex} from './v3-fingerprint.mjs';
+import {visibleEagleItemCount,assertFingerprintInventory,syncV3StitchPartsToIndex,refreshFingerprintIndex,listWebApiItems} from './v3-fingerprint.mjs';
 import {processV3ImportedImages,eagleV2GetById} from './v3-eagle-import.mjs';
 import {eagleArchiveRpc,ensureEagleProductFolders,archiveEagleProduct,ECOM_ARCHIVE_ROOT} from './eagle-archive.mjs';
 import {createV3ReadbackRpc} from './v3-web-readback.mjs';
@@ -18,11 +19,16 @@ import {mirrorEagleMap} from './eagle-map-mirror.mjs';
 import {readCurrentEagleProduct} from './eagle-current.mjs';
 import {stitchEagleProduct} from './stitch-eagle-core.mjs';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
-const [mode,id,sourceUrl]=process.argv.slice(2);
-if(!['--check','--apply'].includes(mode)||!/^[0-9]{8,16}$/.test(id||'')||process.argv.length>5)
+const argv=process.argv.slice(2),recoveryOnly=argv[0]==='--recovery-only';
+if(recoveryOnly)argv.shift();
+const [mode,id,sourceUrl]=argv;
+if(!['--check','--apply'].includes(mode)||!/^[0-9]{8,16}$/.test(id||'')||argv.length>3)
   throw Error('Usage: v3-resume-partial.mjs --check|--apply <productId> [originalTmallUrl]');
 const cfg=JSON.parse(readFileSync(join(root,'config','local.json'),'utf8'));
-if(cfg.v3Experimental!==true)throw Error('V3 experimental mode disabled');
+if(cfg.v3Experimental!==true&&!recoveryOnly)throw Error('V3 experimental mode disabled');
+if(Number(process.versions.node.split('.')[0])<24)throw Error('Partial recovery requires Node >=24');
+const workflow=holdWorkflowLock(root);
+if(recoveryOnly&&!workflow.delegated)throw Error('Recovery-only must run under the explicit recovery coordinator');
 const file=join(root,'data','runs','stable-'+id,'receipt.json');
 if(!existsSync(file))throw Error('No original stable receipt');
 assertIndustryMigrationNotActive(root);
@@ -56,8 +62,18 @@ try{
   const args={root,productId:id,url:identity.url,images:receipt.images,
     libraryPath:app.libraryPath,folderIds:folders,
     indexPath:join(root,'data','fingerprints','v3-eagle.sqlite'),
-    resumePartial:!!job,legacyPlan,checkLibrary:visibleEagleItemCount,
+    resumePartial:!!job,legacyPlan,
+    checkLibrary:async()=>{
+      const current=await rpc('get_app_info',{});
+      if(!current?.libraryPath||resolve(current.libraryPath).toLowerCase()!==resolve(app.libraryPath).toLowerCase())throw Error('Active Eagle library identity changed');
+      return visibleEagleItemCount();
+    },
     checkInventory:assertFingerprintInventory,
+    refreshInventory:(index,path)=>refreshFingerprintIndex(index,path,{listItems:async()=>{
+      const current=await rpc('get_app_info',{});
+      if(!current?.libraryPath||resolve(current.libraryPath).toLowerCase()!==resolve(path).toLowerCase())throw Error('Active Eagle library identity changed');
+      return listWebApiItems();
+    }}),
     linkFolders:(ids,fids)=>rpc('item_add_to_folders',{ids,folders:fids})};
   // All verified positions can be reconstructed from the durable job and
   // physically read back. No CDN prefetch or import stage is needed.

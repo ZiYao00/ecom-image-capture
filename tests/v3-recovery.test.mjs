@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {buildLegacyRecoveryPlan,inspectPartialJournal} from '../scripts/v3-recovery-core.mjs';
 import {processV3ImportedImages} from '../scripts/v3-eagle-import.mjs';
-import {openFingerprintDatabase,makeIndexRows,assertFingerprintInventory} from '../scripts/v3-fingerprint.mjs';
+import {openFingerprintDatabase,makeIndexRows,assertFingerprintInventory,refreshFingerprintIndex} from '../scripts/v3-fingerprint.mjs';
 import {loadJob} from '../scripts/v3-job-state.mjs';
 const tSql=Number(process.versions.node.split('.')[0])>=24?test:test.skip;
 const productId='1023627416066',url='https://detail.tmall.com/item.htm?id='+productId;
@@ -117,4 +117,35 @@ tSql('ledger and snapshot disagreement blocks partial recovery',async()=>{
  await assert.rejects(()=>processV3ImportedImages(args),/unknown outcome/);
  const job=loadJob(f.root,productId);job.events++;
  assert.throws(()=>inspectPartialJournal(f.root,job,args.images,f.libraryPath,url),/count mismatch/);
+});
+
+tSql('prewrite external additions are incrementally reconciled once before new recovery writes',async()=>{
+ const f=setup(),{r,plan}=legacy();
+ f.put('OLDMAIN12345',slots[0].name,assets[0],[main]);
+ f.put('REUSEDDETAIL123','shared',assets[1],[detail]);await f.rebuild();
+ f.put('EXTERNALIMG123','unrelated',image(17),['OTHER']);
+ let refreshes=0,imports=0;
+ const listItems=async()=>({total:f.records.size,items:[...f.records.values()]});
+ const result=await processV3ImportedImages({...f.defaults,images:r.images,legacyPlan:plan,
+  checkInventory:(db,path)=>assertFingerprintInventory(db,path,{listItems}),
+  refreshInventory:async(db,path)=>{refreshes++;return refreshFingerprintIndex(db,path,{listItems});},
+  importLocal:async x=>{imports++;assert.equal(x.name,slots[2].name);return f.put('NEWDETAIL123',x.name,assets[2],[detail]).id;}
+ });
+ assert.equal(result.status,'verified');assert.equal(refreshes,1);assert.equal(imports,1);
+ assert.deepEqual(result.images.map(x=>x.itemId),['OLDMAIN12345','REUSEDDETAIL123','NEWDETAIL123']);
+});
+tSql('external drift after an import stops before the next slot; no automatic write-stage refresh',async()=>{
+ const f=setup();await f.rebuild();let imports=0,refreshes=0;
+ const listItems=async()=>({total:f.records.size,items:[...f.records.values()]});
+ await assert.rejects(()=>processV3ImportedImages({...f.defaults,images:slots,
+  checkInventory:(db,path)=>assertFingerprintInventory(db,path,{listItems}),
+  refreshInventory:async(db,path)=>{refreshes++;return refreshFingerprintIndex(db,path,{listItems});},
+  importLocal:async x=>{
+   imports++;const row=f.put('NEWMAIN12345',x.name,assets[0],[main]);
+   f.put('EXTERNALIMG123','unrelated',image(17),['OTHER']);return row.id;
+  }
+ }),/library changed since fingerprint indexing/);
+ const job=loadJob(f.root,productId);
+ assert.equal(imports,1);assert.equal(refreshes,0);assert.equal(job.slots[0].state,'verified');
+ assert.equal(job.slots[1].submitIntentRecorded,false);assert.equal(job.slots[2].submitIntentRecorded,false);
 });

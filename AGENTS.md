@@ -11,12 +11,18 @@
 4. 批量模式通过 `node scripts/ecom.mjs batch <urls.txt|urls.json> --check|--apply` 进入；顺序采集、不修改原始 URL、已有回执禁止重新采集；显式 V3 批次可在逐位置证据充分时进入受控恢复，每个商品独立记录状态。共享服务异常或结果不确定时批次熔断，后续商品标记 `not_started_due_to_batch_halt`；仅有零 Eagle 写入的明确商品局部扫描失败可继续。失败商品不得直接重跑整单；只在受控恢复后用 `ecom verify-live <ID> --apply` 更新本地索引，不改原始 receipt。
 5. 默认 `storageMode: copy` 本地输出到 `output/`；用户显式路径优先。`storageMode: eagle` 时不复制本地图片，但仍保存索引与回执；按需 `ecom export <商品ID>`。旧商品输出路径保持不变，不移动或重采。
 6. Eagle `item_add` 按最多 8 张分批提交且记录每批提交状态，`item_get` 由脚本自动有限次重查；遇 Eagle「使用原图」时，先验证已关联原 itemId 和商品级图片序号映射，再计入已完成。既有素材不改名不覆盖。**Eagle 的「重复添加提示」可能让导入等待选择，即使 MCP 返回成功也未落盘**；必须核对物理文件，不得对不确定的批次自动重发 `item_add`。
-7. 直连下载仅限 `recover-direct.mjs` 中的受控例外，**必须 Eagle 已部分验证且同一商品累计不超过 10 张**。不经过 Eagle 查重、Eagle 离线或超过上限时禁止执行。
+7. V2 直连交付仅限 `recover-direct.mjs` 的受控例外（Eagle 已部分验证且同一商品累计不超过 10 张）；V2 复用读回允许在目标目录已有候选且历史映射未能核验时，对至多 10 个未确认逻辑位置做内存原图 SHA-256 比对（不落盘、不导入、不替代 Eagle 交付）。优先有限 MCP 目标目录读回、Web API 交叉核验；不唯一或哈希冲突即停止。V3 原始字节预取仍按独立状态机约束。
 8. 新商品采集必须自动创建/复用 Eagle 的 `电商平台批量采集/<行业>/<ID>/主图|详情页`，分类用已有 itemId 建立文件夹关联并回读；不重发 `item_add`。`receipt.archive.status` 必须单独报告，缺图或分类不完整不得报整体完成。
 9. `copy` 模式生成 `main/`、`detail/` 和 `detail/HTML.html`；`eagle` 模式直接通过 Eagle 窗口插件预览，不创建重复素材。OCR 只按需执行；新商品完整归档后自动拼接 750px 长图，既有商品用 `ecom finish <ID>` 验证后续做，直接读 Eagle 原图与哈希并仅回存成品。`ecom stitch` 为本地副本兼容入口。
 10. 历史补图应以 `ecom archive <商品ID> --check` 对账 Eagle 当前实物；若已有受控本地补图，可先执行 `ecom recover-eagle <ID> --check`；保存独立快照，不改原始 receipt。文件缺失或同名/重导入结果不确定时不得重复 `item_add`。
 11. 回执不完整、页面访问异常、已有人工 HTML 或旧文件冲突时按 `docs/RECOVERY.md` 选择固定命令，不凭 Agent 猜测处理。只操作当前 Agent 创建并拥有的商品标签页。
 12. 项目内目录、配置、锁和历史回执各有所属；不直接修改外部 Chrome Profile 或 Eagle 素材库内部文件；经授权新增/分类 Eagle 素材只使用官方 API，保留原图。统一 setup 可在项目内部自动执行固定版本 `npm ci`，但**系统软件安装仅能在明确授权下通过 `-InstallSystemDependencies`**。不自动处理验证码、账号登录；未获各自明确授权不得执行 Git commit/push，不批量删除历史文件。
+
+## 任务互斥与统一恢复
+
+- `ecom recover --check|--apply <ID> [原始完整URL]` 是已失败商品的显式恢复入口（Node 24+；已完成商品只读复核），首次 V2 部分恢复必须提供原 URL。统一执行增量索引、只读预检、至多一次受控 apply、独立验收及登记更新；不改本机 v3Experimental，不改变默认 V2。批量的显式 V3 恢复复用同一入口；默认 V2 批次仍不隐式切换 V3。
+- `ecom v3-index --build` 完整清单对账并增量更新，旧签名缺失时一次性重哈希；`--full` 强制完整重哈希，`--check` 仍仅检查样本。只在两次清单和文件签名一致时激活 generation。写入前最多一次安全增量刷新，后续写入阶段发生外部变化即保留日志停止。
+- capture、batch、index build/full、recover、V3 resume 和 verify-live --apply 共用项目 workflow 互斥；串行子进程使用可核验的本机 lease。超时/未知子进程保留锁和 review.json；`node scripts/lock-health-cli.mjs status` 检查 workflow / workflow-child，不自动归档活动/未知锁。旧工具与 Eagle GUI 不受该项目互斥控制，仍须实际证据读回。禁止绕过锁或重发不确定写入。
 
 ## V3.1 实验分支约束
 

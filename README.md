@@ -172,3 +172,15 @@ Eagle 插件：执行 `node scripts/build-eagle-plugin.mjs` 生成 `release/Eagl
 `chromeMode=project` 是新用户默认模式，浏览器专用 Profile 保存在被 Git 忽略的 `runtime/chrome-profile`。既有 PC1 可继续使用 `chromeMode=shared` 作为历史兼容模式，无需切换。所有登录信息、图片、配置、回执和下载依赖目录均不进入 GitHub。
 
 项目目前是技术测试阶段。GitHub 正式发布前还需经独立干净 Windows 环境完整采集验收。
+
+
+### 失败任务统一恢复（Node 24+）
+
+```powershell
+node scripts/ecom.mjs recover --check <商品ID> "<原始完整URL>"
+node scripts/ecom.mjs recover --apply <商品ID> "<原始完整URL>"
+node scripts/ecom.mjs v3-index --build
+node scripts/lock-health-cli.mjs status
+```
+
+默认 V2 采集不变。恢复只续做有明确未提交证据的位置，已完成商品只读验收；不会临时修改 `v3Experimental`。首次旧 V2 恢复需要原始完整 URL。--build 对完整素材清单增量计算指纹，--full 强制重算。出现未知提交或进程超时时保留回执、日志和锁，不重复提交。
