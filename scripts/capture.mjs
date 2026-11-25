@@ -20,16 +20,18 @@ import {stitchEagleProduct} from './stitch-eagle-core.mjs';
 import {importEagleInBatches} from './eagle-batch.mjs';
 import {evaluateInNavigatedTab} from './chrome-navigation.mjs';
 import {sourceCandidates} from './eagle-source-index.mjs';
-import {resolveReusedSlots,associateConfirmedReuse} from './eagle-reuse-resolution.mjs';
-import {listFolderItems,hashEagleFile,readCurrentEagleProduct} from './eagle-current.mjs';
+import {resolveV2ReuseWithReadback,associateConfirmedReuse} from './eagle-reuse-resolution.mjs';
+import {prefetchOriginalRepresentation} from './v3-prefetch.mjs';
+import {listFolderItems,hashEagleFile,verifyEaglePhysicalFile,readCurrentEagleProduct} from './eagle-current.mjs';
 import {makeMap,saveMap} from './eagle-product-map.mjs';
 import {mirrorEagleMap} from './eagle-map-mirror.mjs';
 import {processV3ImportedImages,eagleV2GetById} from './v3-eagle-import.mjs';
-import {visibleEagleItemCount,syncV3StitchPartsToIndex,assertFingerprintInventory} from './v3-fingerprint.mjs';
+import {visibleEagleItemCount,syncV3StitchPartsToIndex,assertFingerprintInventory,refreshFingerprintIndex,listWebApiItems} from './v3-fingerprint.mjs';
 import {createV3ReadbackRpc} from './v3-web-readback.mjs';
 import {syncIndustryAfterProductComplete} from './industry-eagle.mjs';
 import {classifyProductTitle,isConfidentClassification} from './industry-core.mjs';
 import {assertIndustryMigrationNotActive} from './eagle-industry-move.mjs';
+import {holdWorkflowLock} from './workflow-lock.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -141,7 +143,7 @@ if (args[0] === '--help' || args.length < 1) {
 if (args[0] === '--copy-only') {
   const id = args[1];
   if (!/^[0-9]{8,16}$/.test(id || '')) throw Error('Need product ID');
-  acquireProductLock(root,id);
+  holdWorkflowLock(root);acquireProductLock(root,id);
   const path = join(root, 'data', 'runs', 'stable-' + id, 'receipt.json');
   const receipt = JSON.parse(readFileSync(path, 'utf8'));
   const indexed=readRegistry(root).products[id];
@@ -176,7 +178,7 @@ const productId = url.searchParams.get('id');
 if (url.protocol !== 'https:' || url.hostname !== 'detail.tmall.com' ||
     url.pathname !== '/item.htm' || !/^[0-9]{8,16}$/.test(productId || ''))
   throw Error('Only a valid detail.tmall.com/item.htm product URL is accepted');
-if(!dryRun){assertIndustryMigrationNotActive(root);acquireProductLock(root,productId);}
+if(!dryRun){holdWorkflowLock(root);assertIndustryMigrationNotActive(root);acquireProductLock(root,productId);}
 const indexedBefore=readRegistry(root).products[productId];
 const explicitRoot=resumeExisting?(args[2]||(indexedBefore?.outputDir?dirname(indexedBefore.outputDir):null)):(v3Capture?args[2]:args[1]);
 const destRoot=dryRun?null:resolveOutputRoot(root,explicitRoot,config.outputRoot);
@@ -498,7 +500,16 @@ try {
       root,productId,url:canonical,images:receipt.images,libraryPath:app.libraryPath,
       folderIds:folders,indexPath,
       linkFolders:(ids,fids)=>eagleRpc('item_add_to_folders',{ids,folders:fids},60000),
-      checkLibrary:async()=>visibleEagleItemCount(),checkInventory:assertFingerprintInventory
+      checkLibrary:async()=>{
+        const current=await eagleRpc('get_app_info',{});
+        if(!current?.libraryPath||resolve(current.libraryPath).toLowerCase()!==resolve(app.libraryPath).toLowerCase())throw Error('Active Eagle library identity changed');
+        return visibleEagleItemCount();
+      },checkInventory:assertFingerprintInventory,
+      refreshInventory:(index,path)=>refreshFingerprintIndex(index,path,{listItems:async()=>{
+        const current=await eagleRpc('get_app_info',{});
+        if(!current?.libraryPath||resolve(current.libraryPath).toLowerCase()!==resolve(path).toLowerCase())throw Error('Active Eagle library identity changed');
+        return listWebApiItems();
+      }})
     });
     receipt.images=imported.images;
     receipt.eagle='verified';
@@ -516,15 +527,26 @@ try {
   const sourceIndex=sourceCandidates(root,{excludeProductId:productId});
   const archiveRoot=config.eagleArchiveRootName||ECOM_ARCHIVE_ROOT;
   const scopedRpc=(name,params)=>eagleRpc(name,params,45000);
+  const reuseApp=await scopedRpc('get_app_info',{});
+  if(!reuseApp?.libraryPath)throw Error('Active Eagle library path missing');
+  const webReuseRpc=createV3ReadbackRpc({eagleMcpUrl:eagleUrl,libraryPath:reuseApp.libraryPath});
+  const assertSameLibrary=async()=>{
+    const live=await scopedRpc('get_app_info',{});
+    if(!live?.libraryPath||resolve(live.libraryPath).toLowerCase()!==resolve(reuseApp.libraryPath).toLowerCase())
+      throw Error('Active Eagle library changed during capture');
+  };
+  const reuseHashBudget={remaining:10};
   const folders=await ensureEagleProductFolders({rpc:scopedRpc,productId,
     rootName:archiveRoot,industryCode:effectiveIndustryCode,apply:true});
   if(!folders)throw Error('Cannot verify Eagle category folders before import');
   receipt.folderIds=folders;save();
   const planned=receipt.images.map(x=>({...x,website:canonical}));
   const batchResult=await importEagleInBatches(planned,{
-    add:items=>eagleRpc('item_add',{items},180000),
+    add:async items=>{await assertSameLibrary();return eagleRpc('item_add',{items},180000);},
     read:ids=>eagleRpc('item_get',{ids,fullDetails:true},60000),
-    exists:path=>{try{const s=statSync(path);return s.isFile()&&s.size>0}catch{return false}},
+    exists:(path,record)=>{try{
+      return !!verifyEaglePhysicalFile({id:record?.itemId,name:record?.name,filePath:path});
+    }catch{return false}},
     batchSize:8,folderIds:folders,
     resolveReused:async ({group,submitted,records,unverified,batchIndex})=>{
       if(!unverified.length){
@@ -534,15 +556,24 @@ try {
         }
         return {resolved:[],unresolved:[]};
       }
-      const [main,detail]=await Promise.all([
-        listFolderItems(scopedRpc,folders.main),listFolderItems(scopedRpc,folders.detail)
-      ]);
-      const candidates=[...main.filter(x=>x.folders?.includes(folders.main)).map(x=>({...x,category:'main'})),
-        ...detail.filter(x=>x.folders?.includes(folders.detail)).map(x=>({...x,category:'detail'}))];
-      const resolved=await resolveReusedSlots({missing:unverified,candidates,
-        knownSources:sourceIndex,inspect:hashEagleFile});
+      await assertSameLibrary();
+      const resolved=await resolveV2ReuseWithReadback({missing:unverified,
+        knownSources:sourceIndex,folderIds:folders,inspect:hashEagleFile,
+        listMcp:id=>listFolderItems(scopedRpc,id),
+        listWeb:async id=>{await assertSameLibrary();return listFolderItems(webReuseRpc,id);},
+        budget:reuseHashBudget,
+        sourceDigest:async slot=>{
+          const data=await prefetchOriginalRepresentation(slot.url);
+          if(data.representation?.status==='representation_changed')throw Error('Unproven CDN representation');
+          return data.sha256;
+        }});
+      await assertSameLibrary();
+      const journalBatch=receipt.eagleBatches[batchIndex-1];
+      journalBatch.reuseReadback=resolved.trace;
+      journalBatch.reuseSourceHashes=resolved.sourceHashes;save();
+      if(resolved.webUsed)v3ReadbackRpc=webReuseRpc;
       const hard=new Set(resolved.unresolved.filter(x=>
-        ['fallback_hash_mismatch','fallback_metadata_invalid','ambiguous_shared_items'].includes(x.reason))
+        ['fallback_hash_mismatch','fallback_metadata_invalid','ambiguous_shared_items','source_hash_no_match'].includes(x.reason))
         .map(x=>x.name));
       const remaining=unverified.filter(x=>
         resolved.unresolved.some(r=>r.name===x.name)&&!hard.has(x.name));
@@ -567,7 +598,8 @@ try {
       return resolved;
     },
     record:async batch=>{
-      receipt.eagleBatches[batch.index-1]=batch;
+      const prior=receipt.eagleBatches[batch.index-1];
+      receipt.eagleBatches[batch.index-1]={...prior,...batch};
       receipt.eagleReturnedItemIds=[...new Set(receipt.eagleBatches.flatMap(x=>x?.ids||[]))];
       save();
     }
@@ -699,7 +731,11 @@ console.log(JSON.stringify({
     (!receipt.autoStitchEnabled||['complete','already_complete'].includes(receipt.postprocess?.stitch?.status))&&
      (!receipt.productMap||receipt.productMap.status==='complete'&&receipt.productMap.mirrorStatus==='complete')?'complete':'incomplete',productId,title:receipt.title,
   main:receipt.selected.main,detail:receipt.selected.detail,
-  submitted:selection.length,verified:receipt.images.filter(x=>x.verified).length,
+  selected:selection.length,
+  submitted:v3Capture?(receipt.eagle==='verified'?receipt.images.filter(x=>x.resolution==='imported').length:null):
+    (receipt.eagleBatches||[]).filter(b=>['acknowledged','partial','verified'].includes(b.status)).reduce((n,b)=>n+b.count,0),
+  submissionIntents:v3Capture?null:(receipt.eagleBatches||[]).reduce((n,b)=>n+b.count,0),
+  verified:receipt.images.filter(x=>x.verified).length,
   copied:copies.copied,destination:copies.destination,totalMs:ms(),
   eagleReadbackAttempts:receipt.eagleReadbackAttempts||0,
   html:receipt.postprocess?.html||{status:'skipped'},

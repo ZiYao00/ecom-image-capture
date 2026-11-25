@@ -11,6 +11,7 @@ import {readCurrentEagleProduct,listFolderItems,hashEagleFile} from './eagle-cur
 import {planEagleStitch} from './stitch-eagle-core.mjs';
 import {syncIndustryAfterProductComplete} from './industry-eagle.mjs';
 import {verifyDeliveryMode} from './copy-delivery.mjs';
+import {holdWorkflowLock} from './workflow-lock.mjs';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const [id,mode]=process.argv.slice(2);
 if(!/^\d{8,16}$/.test(id||'')||!['--check','--apply'].includes(mode)||process.argv.length!==4)
@@ -26,6 +27,7 @@ const cfg={...local('local.example.json'),...local('local.json')};
 const endpoint=process.env.EAGLE_MCP_URL||cfg.eagleMcpUrl;
 if(!endpoint)throw Error('Eagle MCP URL unavailable');
 const rpc=(name,args)=>eagleArchiveRpc(endpoint,name,args);
+if(mode==='--apply')holdWorkflowLock(root);
 const unlock=mode==='--apply'?acquireProductLock(root,id):null;
 try{
  const snapshot=await readCurrentEagleProduct({rpc,productId:id,images:receipt.images,rootName:receipt.archive?.rootName||null});

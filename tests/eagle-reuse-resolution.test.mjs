@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {importEagleInBatches} from '../scripts/eagle-batch.mjs';
-import {resolveReusedSlots,associateConfirmedReuse} from '../scripts/eagle-reuse-resolution.mjs';
+import {verifyEaglePhysicalFile,hashEagleFile} from '../scripts/eagle-current.mjs';
+import {mkdtempSync,mkdirSync,writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {resolveReusedSlots,associateConfirmedReuse,resolveV2ReuseWithReadback} from '../scripts/eagle-reuse-resolution.mjs';
 test('Eagle Use Original resolves a ghost acknowledgement by an existing physical ID in target folder',async()=>{
  const url='https://gw.alicdn.com/tfs/same-original.png';
  const logical={category:'detail',order:1,name:'Tmall-891544196832-detail-001',url,website:'https://detail.tmall.com/item.htm?id=891544196832'};
@@ -98,4 +102,57 @@ test('an unlinked or ambiguous reuse candidate never becomes success',async()=>{
  });
  assert.equal(r.resolved.length,0);
  assert.equal(r.unresolved[0].reason,'no_proven_shared_item');
+});
+
+const slot={name:'Tmall-675779438802-detail-001',category:'detail',order:1,url:'https://gw.alicdn.com/tfs/shared.jpg'};
+const original={id:'ORIGINALITEM01',name:'old-detail-001',folders:['DETAIL'],filePath:'old-file',width:10,height:20,ext:'jpg'};
+const proof=async item=>({filePath:item.filePath,sha256:'a'.repeat(64),bytes:120});
+test('V2 folder readback retries delayed association and never needs another import',async()=>{
+ let reads=0,hashes=0;
+ const result=await resolveV2ReuseWithReadback({missing:[slot],knownSources:new Map([[slot.url,[original.id]]]),folderIds:{detail:'DETAIL'},
+  listMcp:async()=>++reads===1?[]:[original],inspect:proof,sourceDigest:async()=>{hashes++;return 'a'.repeat(64)},delays:[0,1],wait:async()=>{}});
+ assert.equal(reads,2);assert.equal(hashes,0);assert.equal(result.resolved[0].itemId,original.id);assert.equal(result.unresolved.length,0);
+});
+test('V2 uses Web readback when MCP has a ghost or delayed folder result',async()=>{
+ const result=await resolveV2ReuseWithReadback({missing:[slot],knownSources:new Map([[slot.url,[original.id]]]),folderIds:{detail:'DETAIL'},
+  listMcp:async()=>[],listWeb:async()=>[original],inspect:proof,delays:[0]});
+ assert.equal(result.webUsed,true);assert.equal(result.resolved[0].itemId,original.id);
+});
+test('V2 hash fallback is unique, folder scoped and shares a bounded product budget',async()=>{
+ const budget={remaining:1};let hashes=0;
+ const args={missing:[slot],knownSources:new Map(),folderIds:{detail:'DETAIL'},listMcp:async()=>[original,{...original,id:'OTHER1234',folders:['OTHER']}],inspect:proof,
+   sourceDigest:async()=>{hashes++;return 'a'.repeat(64)},budget,delays:[0]};
+ const first=await resolveV2ReuseWithReadback(args);assert.equal(first.resolved[0].itemId,original.id);
+ const second=await resolveV2ReuseWithReadback(args);assert.equal(second.resolved.length,0);assert.equal(hashes,1);assert.equal(budget.remaining,0);
+ const ambiguous=await resolveV2ReuseWithReadback({...args,budget:{remaining:1},listMcp:async()=>[original,{...original,id:'OTHER1234'}]});
+ assert.equal(ambiguous.resolved.length,0);assert.equal(ambiguous.unresolved[0].reason,'ambiguous_shared_items');
+});
+test('V2 metadata-only acknowledgment with missing file enters reuse proof before halt',async()=>{
+ let adds=0;
+ const result=await importEagleInBatches([slot],{add:async()=>{adds++;return [{id:'GHOSTITEM001',name:slot.name,success:true}]},
+   read:async()=>[{id:'GHOSTITEM001',name:slot.name,filePath:'missing-file',width:10,height:20,ext:'jpg'}],
+   exists:p=>p==='old-file',delays:[0],resolveReused:async({unverified})=>resolveV2ReuseWithReadback({
+     missing:unverified,knownSources:new Map([[slot.url,[original.id]]]),folderIds:{detail:'DETAIL'},listMcp:async()=>[original],inspect:proof,delays:[0]})});
+ assert.equal(adds,1);assert.equal(result.groups[0].status,'verified');assert.equal(result.records[0].itemId,original.id);assert.equal(result.issues.length,0);
+});
+
+test('V2 actual native physical paths pass before reuse, while foreign or empty files fail',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'ecom-native-path-')),id='NATIVEITEM1234';
+ const dir=join(root,'images',id+'.info');mkdirSync(dir,{recursive:true});
+ const filePath=join(dir,'asset.jpg');writeFileSync(filePath,Buffer.from('physical source'));
+ const physical=verifyEaglePhysicalFile({id,filePath});
+ assert.equal(physical.bytes,15);
+ assert.equal((await hashEagleFile({id,filePath})).bytes,15);
+ assert.throws(()=>verifyEaglePhysicalFile({id:'OTHERITEM1234',filePath}),/does not belong/);
+ const empty=join(dir,'empty.jpg');writeFileSync(empty,'');
+ assert.throws(()=>verifyEaglePhysicalFile({id,filePath:empty}),/empty or not a file/);
+ let reuseCalls=0,adds=0;
+ const result=await importEagleInBatches([slot],{
+   add:async()=>{adds++;return [{itemId:id,name:slot.name,success:true}]},
+   read:async()=>[{id,name:slot.name,filePath,width:10,height:20,ext:'jpg'}],
+   exists:(path,record)=>{try{return !!verifyEaglePhysicalFile({id:record?.itemId,name:record?.name,filePath:path})}catch{return false}},
+   delays:[0],resolveReused:async({unverified})=>{reuseCalls+=unverified.length;return {resolved:[],unresolved:[]}}
+ });
+ assert.equal(adds,1);assert.equal(reuseCalls,0);assert.equal(result.records[0].verified,true);
+ assert.equal(result.groups[0].status,'verified');
 });

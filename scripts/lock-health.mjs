@@ -7,6 +7,7 @@ import {randomUUID} from 'node:crypto';
 
 export function lockPath(root,key){
  if(key==='registry')return join(root,'data','.captures-write-lock');
+  if(key==='workflow'||key==='workflow-child')return join(root,'data','locks',key+'.lock');
  if(!/^\d{8,16}$/.test(String(key)))throw Error('Lock key must be "registry" or an 8-16 digit product ID');
  return join(root,'data','locks','product-'+key+'.lock');
 }
@@ -26,7 +27,8 @@ export function inspectLock(root,key,{now=Date.now(),minAgeMs=15000,checkPid=pro
   if(!Number.isSafeInteger(owner.pid)||owner.pid<1||typeof owner.token!=='string'||
      owner.token.length<10||!Number.isFinite(date)||date>now+2000)
    throw Error('Invalid owner PID, token or timestamp');
-  ageMs=now-Math.max(date,dirStat.birthtimeMs||0);
+  // Date.now() is integer milliseconds; NTFS birthtime may contain a fractional millisecond.
+   ageMs=now-Math.max(date,Math.floor(dirStat.birthtimeMs||0));
   if(!Number.isFinite(ageMs)||ageMs<0)throw Error('Lock age is not verifiable');
  }catch(e){
   return {key,status:'unknown',reason:'Cannot verify lock owner metadata: '+e.message};
@@ -39,7 +41,11 @@ export function inspectLock(root,key,{now=Date.now(),minAgeMs=15000,checkPid=pro
   ...(status==='unknown'?{reason:liveness==='dead'?'Dead PID, but lock is too new':'PID liveness is unknown'}:{})};
 }
 export function archiveStaleLock(root,key,options={}){
- const before=inspectLock(root,key,options);
+ if(key==='workflow'&&inspectLock(root,'workflow-child',options).status!=='absent')
+    throw Error('Inspect/archive the workflow child first; do not release an uncertain descendant');
+  if(key==='workflow-child'&&inspectLock(root,'workflow',options).status==='active')
+    throw Error('Workflow owner is active; do not archive its child');
+  const before=inspectLock(root,key,options);
  if(before.status!=='stale')throw Error('Refusing to archive '+key+' lock: '+before.status+
   (before.reason?' ('+before.reason+')':''));
  const after=inspectLock(root,key,options);

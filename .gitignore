@@ -135,6 +135,8 @@ data/
 !/scripts/v3-resume-no-write.mjs
 !/scripts/v3-recovery-core.mjs
 !/scripts/v3-resume-partial.mjs
+!/scripts/workflow-lock.mjs
+!/scripts/recover-product.mjs
 !/scripts/eagle-request.mjs
 !/scripts/copy-delivery.mjs
 !/scripts/source-closeout-core.mjs

@@ -54,7 +54,7 @@ export async function associateConfirmedReuse({missing,submitted,knownSources,re
  return {resolved:results,unresolved:pending};
 }
 
-export async function resolveReusedSlots({missing,candidates,localFallbacks=[],knownSources=new Map(),inspect}){
+export async function resolveReusedSlots({missing,candidates,localFallbacks=[],sourceDigests=new Map(),knownSources=new Map(),inspect}){
  if(!Array.isArray(missing)||!Array.isArray(candidates)||typeof inspect!=='function')
   throw Error('Invalid Eagle reuse resolution dependencies');
  const out=[],unresolved=[];
@@ -70,7 +70,8 @@ export async function resolveReusedSlots({missing,candidates,localFallbacks=[],k
  };
  for(const slot of missing){
   const fallback=local.get(slot.name);
-  let sourceDigest=null,matchingByBytes=false;
+  let sourceDigest=sourceDigests.get(slot.name)||null,matchingByBytes=sourceDigest!==null;
+   if(matchingByBytes&&!/^[a-f0-9]{64}$/.test(sourceDigest))throw Error('Invalid original source digest');
   if(fallback){
    if(fallback.category!==slot.category||fallback.order!==slot.order||!existsSync(fallback.file)){
     unresolved.push({name:slot.name,reason:'fallback_metadata_invalid'});continue;
@@ -86,8 +87,9 @@ export async function resolveReusedSlots({missing,candidates,localFallbacks=[],k
   for(const candidate of candidates.filter(x=>x.category===slot.category)){
    if(!candidate.id||candidate.isDeleted===true||!(candidate.width>0)||!(candidate.height>0))
     continue;
-   let physical;
-   try{physical=await verify(candidate)}catch{continue;}
+   if(!matchingByBytes&&!known.has(candidate.id))continue;
+     let physical;
+     try{physical=await verify(candidate)}catch{continue;}
    if(matchingByBytes?physical.sha256===sourceDigest:known.has(candidate.id))
     possibles.push({item:candidate,physical});
   }
@@ -103,4 +105,70 @@ export async function resolveReusedSlots({missing,candidates,localFallbacks=[],k
    sha256:x.physical.sha256});
  }
  return {resolved:out,unresolved};
+}
+
+// Bounded read-only target-folder retries; never repeat an import. Only positive
+// folder membership and physical identity count as evidence on either transport.
+// Hash fallback reads at most ten unresolved source slots per product in memory.
+export async function resolveV2ReuseWithReadback({missing,knownSources,folderIds,
+  listMcp,listWeb=null,inspect,sourceDigest=null,budget={remaining:10},
+  delays=[0,600,1500,3000],wait=ms=>new Promise(r=>setTimeout(r,ms))}){
+  if(!Array.isArray(missing)||typeof listMcp!=='function'||typeof inspect!=='function')
+    throw Error('Invalid V2 reuse readback dependencies');
+  const resolved=[],blocked=new Map(),trace=[],digests=new Map();
+  let pending=[...missing],webUsed=false,hasCandidates=false;
+  const candidatesFor=async(reader,slots)=>{
+    const cats=[...new Set(slots.map(x=>x.category))];
+    const rows=await Promise.all(cats.map(async category=>{
+      const id=folderIds?.[category];
+      if(!id)throw Error('Missing target folder for reuse');
+      const items=await reader(id);
+      if(!Array.isArray(items))throw Error('Invalid folder readback');
+      return items.filter(x=>x.folders?.includes(id)).map(x=>({...x,category}));
+    }));
+    return rows.flat();
+  };
+  const absorb=(proof,transport)=>{
+    const ids=new Set(proof.resolved.map(x=>x.name));
+    for(const x of proof.unresolved.filter(x=>x.reason==='ambiguous_shared_items'))blocked.set(x.name,x);
+    resolved.push(...proof.resolved);
+    if(transport==='web'&&proof.resolved.length)webUsed=true;
+    pending=pending.filter(x=>!ids.has(x.name)&&!blocked.has(x.name));
+  };
+  for(let i=0;i<delays.length&&pending.length;i++){
+    if(delays[i])await wait(delays[i]);
+    for(const [transport,reader] of [['mcp',listMcp],['web',listWeb]]){
+      if(!reader||!pending.length)continue;
+      try{
+        const rows=await candidatesFor(reader,pending);hasCandidates||=rows.length>0;
+        const proof=await resolveReusedSlots({missing:pending,candidates:rows,knownSources,inspect});
+        trace.push({attempt:i+1,transport,candidates:rows.length,resolved:proof.resolved.length});
+        absorb(proof,transport);
+      }catch(error){trace.push({attempt:i+1,transport,error:String(error.message||error).slice(0,160)});}
+    }
+  }
+  if(sourceDigest&&pending.length&&hasCandidates){
+    for(const slot of pending){
+      if(!Number.isInteger(budget.remaining)||budget.remaining<=0)break;
+      budget.remaining--;
+      try{
+        const value=await sourceDigest(slot);
+        if(/^[a-f0-9]{64}$/.test(value||''))digests.set(slot.name,value);
+      }catch(error){trace.push({transport:'source_hash',name:slot.name,error:String(error.message||error).slice(0,160)});}
+    }
+    if(digests.size){
+      for(const [transport,reader] of [['web',listWeb],['mcp',listMcp]]){
+        if(!reader||!pending.some(x=>digests.has(x.name)))continue;
+        try{
+          const slots=pending.filter(x=>digests.has(x.name));
+          const rows=await candidatesFor(reader,slots);
+          const proof=await resolveReusedSlots({missing:slots,candidates:rows,knownSources,sourceDigests:digests,inspect});
+          trace.push({transport:transport+'_hash',candidates:rows.length,resolved:proof.resolved.length});
+          absorb(proof,transport);
+        }catch(error){trace.push({transport:transport+'_hash',error:String(error.message||error).slice(0,160)});}
+      }
+    }
+  }
+  return {resolved,unresolved:[...blocked.values(),...pending.map(x=>({name:x.name,reason:digests.has(x.name)?'source_hash_no_match':'no_proven_shared_item'}))],
+    trace,webUsed,sourceHashes:digests.size};
 }

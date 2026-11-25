@@ -8,6 +8,7 @@ import {spawnSync} from 'node:child_process';
 import {readRegistry} from './capture-store.mjs';
 import {parseBatchUrls,parseBatchOptions,classifyBatchProduct,collectBatchBarriers,runBatchQueue,BATCH_BUDGETS} from './batch-core.mjs';
 import {acquireLibraryLock,loadJob} from './v3-job-state.mjs';
+import {holdWorkflowLock} from './workflow-lock.mjs';
 import {inspectLock} from './lock-health.mjs';
 import {eagleArchiveRpc} from './eagle-archive.mjs';
 
@@ -67,7 +68,8 @@ if(mode==='--check'){
  // A stale batch lock is never silently removed; a previous unknown process must be inspected.
  const app=await eagleArchiveRpc(cfg.eagleMcpUrl,'get_app_info',{});
  if(!app?.libraryPath)throw Error('No current Eagle library identity');
- const release=acquireLibraryLock(root,'batch:'+app.libraryPath);
+ const workflow=holdWorkflowLock(root,{coordinator:true});
+  const release=acquireLibraryLock(root,'batch:'+app.libraryPath);
  try{
  const planned=plan();
  mkdirSync(folder,{recursive:true});
@@ -85,7 +87,8 @@ if(mode==='--check'){
   let obj=null;try{obj=JSON.parse((child.stdout||'').trim())}catch{}
   const error=String(child.error?.message||obj?.error||child.stderr||'').slice(0,1200);
   const uncertainProcess=!!child.error||child.status===null||obj?.exitCode===null||/ETIMEDOUT|timeout.*spawn|spawn.*timeout/i.test(error);
-  return {ok:!child.error&&child.status===0,code:child.status,result:obj?.result??null,error,uncertainProcess};
+  if(uncertainProcess)workflow.markUncertain(error||'Batch child exit uncertain');
+   return {ok:!child.error&&child.status===0,code:child.status,result:obj?.result??null,error,uncertainProcess};
  };
  const verifyDelivery=(entry,{apply=false}={})=>{
   const id=entry.productId;
@@ -113,10 +116,9 @@ if(mode==='--check'){
   }
   // A successful read-only check proves recovery is supported; never retry
   // the original capture or a failed recovery apply in the same batch.
-  const check=call(['v3-resume-partial','--check',id,entry.fullUrl],BATCH_BUDGETS.recovery);
-  if(!check.ok||check.result?.status!=='ready_partial_recovery')return {...check,ok:false,receipt:readReceipt(id)};
-  const applied=call(['v3-resume-partial','--apply',id,entry.fullUrl],BATCH_BUDGETS.recovery);
-  return {...applied,ok:applied.ok&&applied.result?.status==='complete',recovered:true,receipt:readReceipt(id)};
+  const applied=call(['recover','--apply',id,entry.fullUrl],BATCH_BUDGETS.recovery);
+    return {...applied,ok:applied.ok&&['complete','already_complete'].includes(applied.result?.status),
+      recovered:true,finalized:true,receipt:readReceipt(id)};
  };
  const saveRow=(entry,update)=>{
    const row=journal.items[entry.index-1];

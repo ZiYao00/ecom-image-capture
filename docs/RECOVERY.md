@@ -41,6 +41,13 @@
 3. `node scripts/ecom.mjs archive <ID> --check`：按映射核验全部逻辑位置；`stitch-eagle --check` 核验长图。若长图已存在但缺乏原生成标记，报告 `existing_eagle_targets_no_retry`，不得重复提交。
 4. 检查 `verify-live --check` 与 `captures.json` 状态时需区别**已完整的逻辑映射**和**主图分类中的历史无关附加素材**；未受本任务授权，不清理其它用户原有 Eagle 分类。原有 `recover-duplicates` 仅在无法安全复用且获得适当授权后作为备用工具。
 
+## 统一恢复入口与并发边界
+
+- 优先 `ecom recover --check <ID> [原始完整URL]` 或 `ecom recover --apply <ID> [原始完整URL]`。首次旧 V2 部分任务需完整原 URL；已完成商品即使使用 --apply 也只读验收。Node 24+ 执行 V3 证据保护恢复，不改变配置或默认 V2；保留原回执与协调器事件日志。--check 允许更新本地指纹缓存，但不写 Eagle；--apply 只有只读预检全部通过才执行一次恢复并独立 verify-live。
+- 旧 V2 ghost ID：先有限次目标文件夹读回与 Web API 实物交叉验证，允许最多 10 个未确认源位置的内存哈希比对，不保存直连图片。已提交位置仅映射或读取，未知/歧义绝不重发 item_add。
+- 指纹 --build 先读取完整清单，依据文件身份与物理签名增量复用哈希，读取第二份清单验证未改变才原子切换 generation；旧行缺少签名会一次性重新计算。--full 可明确强制重哈希；候选最终仍重新验证真实字节和目标文件夹。新增/替换/删除导致的漂移可在新写入前有限刷新；写入阶段发生变化或结果不明只允许记录并停止，不能自动重试写入。
+- 核心入口共享 `data/locks/workflow.lock` 与串行子任务 `workflow-child.lock`。遇超时或不确定退出先查看 `node scripts/lock-health-cli.mjs status`、owner.json、review.json、商品锁、旧 V3 意图日志及现场。仅确认进程已退出、所有未决写入已查证后，才可使用现有 --archive-stale workflow-child（先）/workflow（后）；不得自动释放未知任务。此锁不能阻止 Eagle GUI/其它软件的独立写入。
+
 ## V3.1 新状态与恢复边界（实验链路）
 
 - 本机专用：`data/fingerprints/v3-eagle.sqlite` 为可重建只读索引的本地缓存，`data/v3-cache/<ID>/` 为原始字节缓存；`data/v3-jobs/<ID>.json` 和 `<ID>.events.jsonl` 是必须保留的提交意图日志。
@@ -83,3 +90,7 @@ node scripts/reconcile-captures.mjs --check
 ```
 
 除上述被代码保护的恢复入口外，`docs/HANDOFF-*` 与 `references/legacy/` 只作为历史诊断记录，不作为执行脚本来源。
+
+## 物理路径误判的恢复规则
+
+若首批已有有效 Eagle 原图及目标目录关联，但回执显示 material missing，先调用共用物理校验 `verifyEaglePhysicalFile` 只读复核，区分真实缺失与路径处理错误。修复校验后保留原始回执，使用 `ecom recover --apply` 保护已提交位置并续做有明确未提交证据的尾部；已完成商品不得重采以验证修复。真实入库回放与完整新商品 V2 一次成功验收必须分别记录。

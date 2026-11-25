@@ -112,3 +112,12 @@ node --test tests/*.test.mjs
 ```
 
 异常处理以 [RECOVERY.md](RECOVERY.md) 为准；Windows 新机安装以 [INSTALL-WINDOWS.md](INSTALL-WINDOWS.md) 为准。正式规则不继承 `docs/HANDOFF-*` 中已废止的命令。
+
+
+## 单商品与批次恢复统一、索引增量对账
+
+- 默认 V2 不变。历史复用读回限次重查目标文件夹，官方 Web API 可作物理交叉核验；确有候选且历史证据不足时，至多 10 个未确认逻辑位置使用内存 SHA-256 比对，不做直连交付或重复提交。记录真实提交意图、已应答提交位置、选中位置和核验数，区别于页面扫描数量。
+- V3 `v3-index --build` 是增量刷新；--full 才是强制重哈希。以全量有效 itemId、物理签名（尺寸、大小、修改/创建/变更时间、文件身份等）和第二次完整清单为闸门；新旧 schema 兼容，旧签名不存在时重哈希。精确复用候选仍必须重新校验物理 SHA-256 与目标归档。外部 GUI 不可锁定；写入前只允许有限次对账，不确定写入不自动重发。
+- 正式 `ecom recover --check|--apply ID [原始完整URL]` 复用逐位置部分恢复，Node 24+；不修改本地 V3 开关。显式 V3 批次也使用该协调器；完成后单独核验交付，已完成商品不会再次写入。任务级 workflow/worker 锁防止项目核心入口相互抢占，超时保留 review 证据，非确定写入必须停止。
+
+- V2 原图入库和物理哈希共用 `eagle-current.mjs` 的 `verifyEaglePhysicalFile`：解析真实文件路径、统一 Windows/POSIX 路径分隔符、核对 itemId 所属目录及非空文件。禁止重复实现路径转义规则；物理路径回归必须使用真实本机文件，不得仅以 exists:()=>true 模拟。
