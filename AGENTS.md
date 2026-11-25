@@ -33,7 +33,7 @@ V3 只在 Node.js 24+ 使用内置 SQLite，不能因此抬高 V2 Node 最低版
 - 分类使用商品 ID 而非共享 Eagle 图片 ID；商品登记 data/captures.json 是唯一事实来源，不修改历史 receipt 或淘宝 URL。人工更正 manualLocked 必须保留。
 - 采集完成及 verify-live --apply 完成时按商品标题自动分类并在已验收的首张 750px 长图上增量设置专用行业标签；失败返回 industrySync 独立结果，不改变采集成功状态。
 - PC2 已将 29 个历史商品完整迁移为 `电商平台批量采集/<行业>/<商品ID>/主图|详情页`，采用 Eagle 官方 `folder_update(parentId)`，保留商品 ID、主图/详情目录 ID 和物理原图；未知行业进「待分类」。`eagle-folder-layout.mjs` 负责新旧结构统一解析，任何重复商品 ID 必须拒绝新建。
-- Eagle 原生智能文件夹及长图标签仅保留为辅助视图；未经额外授权不得删除。
+- Eagle 行业智能文件夹（含 `采集行业｜...` 及其子类）已停用自动创建和依赖；只保留商品实体行业目录及长图行业/子类标签。旧智能视图仅在确认本项目描述标识、ID、筛选条件、成员与归档完整性并获得删除授权后逐项移除，禁止删除素材或用户自建视图。
 - 行业实体目录操作：`ecom industry-folders --check [ID]` 只读、`--apply ID|--all` 按 ID 一次移动、`--rollback ID` 只读回退计划（真正回退需要再传 `--apply`）。`ecom industry --set ID industry subcategory` 人工锁定后会同步移动商品实体目录。分类证据不足需待人工确认，不自动调用 LLM。
 - 迁移前记录 `data/migrations/industry` 快照（商品/主图/详情子目录 ID、根目录长图 itemId、各类目 itemId 集合）；`data/locks/industry-layout.lock` 存在时禁止新采集写入。未知文件夹移动结果必须只读核对，不重复提交；历史 `migrate-eagle` 只能合并旧日期根目录，不能把行业结构展平。
 

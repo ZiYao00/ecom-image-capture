@@ -58,10 +58,10 @@
 
 ## 行业分类异常恢复
 
-- 先执行 ecom industry --check [ID] 检查商品级分类，再用 --sync-eagle [ID] 恢复已验收商品的 Eagle 显示。禁止将分类异常当作缺图重新采集。
+- 先执行 ecom industry --check [ID] 检查商品级分类，再用 --sync-eagle [ID] 恢复已验收商品的 Eagle 行业/子类标签；不创建智能文件夹。禁止将分类异常当作缺图重新采集。
 - 人工更正：ecom industry --set <ID> <industryCode> <subcategoryCode>，写入人工锁定。只移除本项目的旧行业标签，保留全部其它 Eagle 标签和原始图片。
 - incomplete 或没有已验收长图的商品返回 pending_long_image，分类可登记但不得发布代表图；未知商品名词为 needs_review，自动采集仍正常。
-- Eagle Smart Folder 或标签写入结果不明时，先核查 data/industry-sync/<ID>.events.jsonl 与当前 Eagle 标签、Smart Folder ID；未确定前不重新执行不确定写入。
+- Eagle 标签写入结果不明时，先核查 `data/industry-sync/<ID>.events.jsonl` 与当前 Eagle 标签；未确定前不重新执行不确定写入。旧行业 Smart Folder 已停用自动创建；历史视图清理或回退仅在明确授权、独立快照和官方操作验证下进行，不通过重复采集恢复视图。
 - 分类前的商品登记快照保存于 runtime/industry-backups，恢复只针对受影响分类字段，保留期间其它采集信息修改。
 
 ## 商品行业文件夹迁移恢复
@@ -69,7 +69,7 @@
 - 行业主目录现为 `电商平台批量采集/<一级行业>/<商品ID>/主图|详情页`。迁移时保存 `data/migrations/industry/<商品ID>-*.json`，含原父目录 ID、目标父目录 ID、商品目录与主图/详情目录 ID、根目录及子目录的原 itemId 集合。
 - 如果 `folder_update` RPC 中断、不确定或存在 `move_intent` 但缺少 `move_verified`，先 `ecom industry-folders --check <ID>` 和 Eagle 当前 `folder_get`，再人工核对该迁移快照；**不要重新调用 --apply 或尝试第二次移动**。其他商品无需因此重采。
 - 回退前先执行 `ecom industry-folders --rollback <ID>`（只读），确认当前父目录、原目录 ID、原 itemId 关联与迁移快照一致；只有另行显式执行 `--rollback <ID> --apply` 才会将商品文件夹移回原父目录，且保留已创建的行业目录，不做删除清理。回退后分类数据仍是原行业，可能暂时存在位置不一致，后续需统一补正。
-- 人工重新分类 `ecom industry --set ID industry subcategory` 现会移动整个商品目录；写入失败时保留人工分类与待同步标记，不可误报全流程完成。Eagle Smart Folder 仅辅助筛选，不需要重新生成长图或重复导入原图。
+- 人工重新分类 `ecom industry --set ID industry subcategory` 现会移动整个商品目录；写入失败时保留人工分类与待同步标记，不可误报全流程完成。行业/子类标签仅辅助筛选，旧行业 Smart Folder 不再创建；不需要重新生成长图或重复导入原图。
 
 ## 常用只读命令
 

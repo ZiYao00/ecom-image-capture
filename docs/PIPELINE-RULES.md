@@ -57,9 +57,9 @@ node scripts/ecom.mjs capture "<完整天猫URL>" "D:\素材"     # 用户指定
 - 商品唯一分类来源为 data/captures.json.products[商品ID].classification，包含行业/子类编码、规则版本、证据、来源和人工锁定。原始 receipt 与历史淘宝 URL 不改写。分类不等于采集完整性。
 - 商品标题按确切产品名词分类，AV、3C、mini 等泛词不作为行业依据；冲突或未知则 needs_review。人工锁定分类高于自动规则；本版无需 LLM API。
 - ecom industry --check 只读预览；--apply 只修改业务分类；--list 查询；--set 手工改类并锁定；--sync-eagle 联动。原有 capture 与 verify-live --apply 只在完整商品验收后尝试自动联动，联动失败不影响采集状态。
-- Eagle 通过带命名空间的 采集行业｜... / 采集子类｜... 标签与原生 Smart Folder 展示。只对独立验证过的商品首张 750px 长图设置标签；不导入或移动原图，不修改用户其它标签和文件夹。子类 Smart Folder 采用双标签筛选。
-- Smart Folder 必须带本项目描述标识 ecom-image-capture:industry-v1:；同名非本项目目录不覆盖。Eagle 写入前记录 data/industry-sync 事件，未知结果停止并只读复核，禁止盲目重复创建。
-- 未完成长图商品只登记行业，分类待同步状态不影响继续补图、去重和长图流程；PC1/PC2 各自维护 Eagle itemId 和智能文件夹，不跨机器复制元数据。
+- Eagle 仅同步带命名空间的 `采集行业｜...` / `采集子类｜...` 标签。只对独立验证过的商品首张 750px 长图设置标签；不导入或移动原图，不修改用户其它标签和文件夹。所有采集、验收、恢复及手动分类入口禁止自动创建或依赖行业 Smart Folder；`industrySync.status=synced` 表示标签已读回验证（`smartFolders: retired`，`smartFolderIds: []`）。
+- 历史行业 Smart Folder 仅保留只读识别逻辑。本项目描述标识为 `ecom-image-capture:industry-v1:`；清理前必须核实具体 ID、父子关系、筛选条件和成员，保存快照，经明确授权后使用 Eagle 官方智能视图操作逐项移除。禁止普通文件夹/素材删除、直接修改素材库底层文件和盲目重复未知写入。标签写入前记录 `data/industry-sync` 事件并以 `industry_tags_verified` 验收。
+- 未完成长图商品只登记行业，分类待同步状态不影响继续补图、去重和长图流程；PC1/PC2 各自维护 Eagle itemId、标签和历史智能视图清理证据，不跨机器复制元数据。
 
 ## Eagle 实体行业层级（当前主归档结构）
 
@@ -68,8 +68,8 @@ node scripts/ecom.mjs capture "<完整天猫URL>" "D:\素材"     # 用户指定
 - `scripts/eagle-folder-layout.mjs` 为唯一旧/新层级解析器；归档、补图、长图、V2/V3 路径均复用它。若同一商品 ID 出现在两个位置、行业目录名未知或行业 ID 冲突，必须停止并人工核验，禁止自动再创建同名商品目录。
 - `ecom industry-folders --check [ID]` 只读；`--apply <ID>` 单商品迁移；`--apply --all` 将未归位商品逐个移动；`--rollback ID` 为只读回退资格检查，只有单独显式 `--rollback ID --apply` 才执行回退。任何真实移动都先在 `data/migrations/industry` 保存原父目录、商品/主图/详情文件夹 ID、商品根目录长图与源图片 itemId 集合，并在 `move_intent` 前持久化。RPC 结果不确定后只读复核，绝不直接重发。
 - 迁移期间使用 `data/locks/industry-layout.lock`（独立保存归档历史）与 Eagle 资源库写入锁；已有正在处理的商品锁阻止迁移。旧版 `migrate-eagle` 仅合并日期根目录，已兼容行业嵌套，不能将商品展平回旧目录。
-- `ecom industry --apply` 仍只更新分类元数据；`industry --set ID industryCode subcategoryCode` 会先保存人工锁定，再迁移已有商品目录，最后同步可用的智能文件夹标签。若移动不明，分类登记保留为待同步，不重复调用 Eagle。
-- Eagle 原生智能文件夹和仅标记已验收长图的标签保留为**辅助筛选入口**，不是商品实体归档的替代品。未来恢复/手工同步行业目录必须使用 `industry-folders` 命令。
+- `ecom industry --apply` 仍只更新分类元数据；`industry --set ID industryCode subcategoryCode` 会先保存人工锁定，再迁移已有商品目录，最后同步可用的长图行业及子类标签。若移动不明，分类登记保留为待同步，不重复调用 Eagle。
+- **唯一目录展示为商品实体行业层级**。仅标记已验收长图的标签保留为辅助筛选元数据；禁止重新启用项目自动创建行业智能文件夹的旧逻辑。恢复/手工同步行业目录必须使用 `industry-folders` 命令。
 - 新商品在页图读取完成后，按照人工锁定/规则识别结果选择行业并直接创建目标商品文件夹，不能先创建旧根级目录再移动。真实新商品再次完成采集的全链路验收仍属于发布回归，不能由目录模拟测试替代。
 
 ## 批量采集与当前状态对账

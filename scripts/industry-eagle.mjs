@@ -1,5 +1,6 @@
-// Eagle native industry views. Never copies, renames, relocates or re-imports an original.
-// The classification in captures.json is authoritative; tags/smart folders are a materialized view.
+// Eagle industry tags. Never copies, renames, relocates or re-imports an original.
+// The classification in captures.json is authoritative; physical industry folders are the main view.
+// Legacy smart folder definitions/readers are retained only for read-only inspection.
 import {existsSync,readFileSync,appendFileSync,mkdirSync} from 'node:fs';
 import {join,dirname} from 'node:path';
 import {spawnSync} from 'node:child_process';
@@ -30,6 +31,9 @@ export async function eagleWebAPI(route,{method='GET',body=null,base='http://127
   const parsed=new URL(route,'http://eagle.local');
   if(parsed.origin!=='http://eagle.local'||!/^\/(?:smartFolder|item)\/[a-zA-Z]+$/.test(parsed.pathname))
     throw Error('Unsupported industry API path');
+  if(parsed.pathname.startsWith('/smartFolder/')&&
+    (method.toUpperCase()!=='GET'||body!==null||!['/smartFolder/get','/smartFolder/getRules','/smartFolder/getItems'].includes(parsed.pathname)))
+    throw Error('Industry smart folders are retired; only read-only inspection is supported');
   const response=await fetchFn(new URL('/api/v2'+route,base).href,{
     method,...(body!==null?{headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{}),
     signal:AbortSignal.timeout(30000)});
@@ -79,27 +83,6 @@ export function findOwnedSmartFolder(folders,spec,parentId=null){
     throw Error('Owned Eagle smart folder conditions changed; manual review required: '+spec.name);
   return item;
 }
-export async function ensureIndustrySmartFolders(classification,{api=eagleWebAPI,journal=()=>{}}={}){
-  await eagleSmartFolderRules({api});
-  const {top,child}=smartFolderSpecs(classification);
-  const ensure=async(spec,parent)=>{
-    let list=await listSmartFolders({api});
-    let saved=findOwnedSmartFolder(list,spec,parent);
-    if(saved)return saved;
-    journal('smart_folder_create_intent',{name:spec.name,parent,description:spec.description});
-    const data=await api('/smartFolder/create',{method:'POST',
-      body:{...spec,...(parent?{parent}:{})}});
-    list=await listSmartFolders({api});
-    saved=findOwnedSmartFolder(list,spec,parent);
-    if(!saved||!saved.id)throw Error('Eagle smart folder create unverified: '+spec.name);
-    journal('smart_folder_create_verified',{name:spec.name,id:saved.id});
-    return saved;
-  };
-  const root=await ensure(top,null);
-  const leaf=await ensure(child,root.id);
-  return {rootId:root.id,childId:leaf.id,tags:[industryTag(classification.industryCode),
-    subcategoryTag(classification.industryCode,classification.subcategoryCode)]};
-}
 export async function readEagleImage(id,{api=eagleWebAPI}={}){
   if(!/^[A-Za-z0-9_-]{8,64}$/.test(id||''))throw Error('Invalid Eagle representative ID');
   const result=await api('/item/get?id='+encodeURIComponent(id));
@@ -134,7 +117,9 @@ async function verifyTags(id,desired,{api=eagleWebAPI}={}){
 }
 export async function tagIndustryRepresentative(id,classification,{rpc,api=eagleWebAPI,journal=()=>{}}={}){
   if(typeof rpc!=='function')throw Error('Eagle tag API is required');
-  const desired=smartFolderSpecs(classification).tags;
+  if(!isConfidentClassification(classification))throw Error('Cannot publish an ambiguous industry');
+  const desired=[industryTag(classification.industryCode),
+    subcategoryTag(classification.industryCode,classification.subcategoryCode)];
   let item=await checkedImage(id,{api});
   const before=[...(item.tags||[])];
   const action=planIndustryTags(before,desired);
@@ -177,13 +162,14 @@ export function verifyRepresentativeFromProject(root,id){
     throw Error('Invalid Eagle long-image representative identity');
   return representative;
 }
-export async function syncIndustryEagle(root,productId,{api=eagleWebAPI,rpc=null}={}){
+export async function syncIndustryEagle(root,productId,{api=eagleWebAPI,rpc=null,
+  verifyRepresentative=verifyRepresentativeFromProject}={}){
   const registry=readRegistry(root),record=registry.products[productId];
   if(!record||!isConfidentClassification(record.classification))
     return{status:'skipped_no_confirmed_classification',productId};
   if(record.workflowStatus!=='complete')
     return{status:'pending_long_image',productId};
-  const verified=verifyRepresentativeFromProject(root,productId);
+  const verified=verifyRepresentative(root,productId);
   const cfg=JSON.parse(readFileSync(join(root,'config','local.json'),'utf8'));
   const call=rpc||(async(name,args)=>eagleArchiveRpc(cfg.eagleMcpUrl,name,args));
   const eagle=await call('get_app_info',{});
@@ -196,24 +182,12 @@ export async function syncIndustryEagle(root,productId,{api=eagleWebAPI,rpc=null
     const current=await checkedImage(verified.itemId,{api});
     if(current.name!==verified.name||!Array.isArray(current.folders))
       throw Error('Representative name/folders differ from the independent proof');
-    const folders=await ensureIndustrySmartFolders(record.classification,{api,journal:log});
     const tagged=await tagIndustryRepresentative(verified.itemId,record.classification,{rpc:call,api,journal:log});
     if(!tagged.preservedUnmanagedTags)throw Error('Unrelated Eagle tags unexpectedly changed');
-    let appeared=false,appearedSub=false;
-    for(const wait of [0,400,1000,2000]){
-      if(wait)await shortWait(wait);
-      const [all,sub]=await Promise.all([getSmartFolderItems(folders.rootId,{api}),
-        getSmartFolderItems(folders.childId,{api})]);
-      appeared=all.some(x=>x.id===verified.itemId);
-      appearedSub=sub.some(x=>x.id===verified.itemId);
-      if(appeared&&appearedSub)break;
-    }
-    if(!appeared||!appearedSub)throw Error('Smart folder filter did not include tagged long image; read-only review required');
-    log('industry_smart_folder_verified',{id:verified.itemId,
-      root:folders.rootId,child:folders.childId});
+    log('industry_tags_verified',{id:verified.itemId,tags:tagged.tags,smartFolders:'retired'});
     return{status:'synced',productId,representativeId:verified.itemId,
       industry:record.classification.industryCode,subcategory:record.classification.subcategoryCode,
-      tagStatus:tagged.status,smartFolderIds:[folders.rootId,folders.childId],verified:true};
+      tagStatus:tagged.status,smartFolderIds:[],smartFolders:'retired',verified:true};
   }finally{release()}
 }
 
