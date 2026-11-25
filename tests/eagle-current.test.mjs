@@ -1,5 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync} from 'node:fs';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+import {createHash} from 'node:crypto';
 import {expectedProductItems,findProductArchive,readCurrentEagleProduct} from '../scripts/eagle-current.mjs';
 import {planEagleStitch,stitchPartName,stitchEagleProduct} from '../scripts/stitch-eagle-core.mjs';
 
@@ -111,4 +115,47 @@ test('split naming has deterministic part numbers',()=>{
  const p=planEagleStitch(snapshot,{width:750,maxHeight:20000});
  assert.equal(p.partCount,2);
  assert.equal(p.partHeights.reduce((a,b)=>a+b,0),32000);
+});
+
+function stitchFixture({lost=false,missing=false,renderError=false}={}){
+ const m=mock(),outputRoot=mkdtempSync(join(tmpdir(),'ecom-stitch-resume-'));
+ let writes=0,renders=0;
+ const inspectFile=async item=>item.filePath.startsWith('X:/')?m.inspectFile(item):({
+  filePath:item.filePath,bytes:readFileSync(item.filePath).length,
+  sha256:createHash('sha256').update(readFileSync(item.filePath)).digest('hex')});
+ const rpc=async(name,args)=>{
+  if(name!=='item_add')return m.rpc(name,args);
+  writes++;
+  const x=args.items[0],id='LONGITEM'+writes;
+  if(!missing)m.entries.PROD.push({id,name:x.name,ext:'jpg',width:750,height:1200,folders:['PROD'],filePath:x.source.path});
+  if(lost||missing)throw Error('lost response');
+  return [{success:true,itemId:id}];
+ };
+ const build=({outputDir})=>{
+  renders++;mkdirSync(outputDir,{recursive:true});
+  const f=join(outputDir,'part.jpg');writeFileSync(f,'rendered bytes');
+  if(renderError&&renders===1)throw Error('render failed');
+  return {status:'ok',width:750,height:1200,parts:[{file:f,width:750,height:1200}]};
+ };
+ return {args:{rpc,productId:pid,images:m.images,inspectFile,outputRoot,build,apply:true,wait:async()=>{}},
+  writes:()=>writes,renders:()=>renders};
+}
+test('postprocess recovers a long-image lost acknowledgement by exact readback without reimport',async()=>{
+ const f=stitchFixture({lost:true});
+ await assert.rejects(()=>stitchEagleProduct(f.args),/lost response/);
+ assert.equal(f.writes(),1);
+ const result=await stitchEagleProduct(f.args);
+ assert.equal(result.status,'already_complete');assert.equal(f.writes(),1);assert.equal(f.renders(),1);
+});
+test('postprocess refuses to replay unknown long-image submission without physical proof',async()=>{
+ const f=stitchFixture({missing:true});
+ await assert.rejects(()=>stitchEagleProduct(f.args),/lost response/);
+ const result=await stitchEagleProduct(f.args);
+ assert.equal(result.status,'previous_attempt_no_retry');assert.equal(f.writes(),1);
+});
+test('failed long-image rendering resumes in a fresh stage without overwriting or prior Eagle writes',async()=>{
+ const f=stitchFixture({renderError:true});
+ await assert.rejects(()=>stitchEagleProduct(f.args),/render failed/);assert.equal(f.writes(),0);
+ assert.equal((await stitchEagleProduct(f.args)).status,'complete');
+ assert.equal(f.writes(),1);assert.equal(f.renders(),2);
 });

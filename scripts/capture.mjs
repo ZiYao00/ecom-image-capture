@@ -3,7 +3,8 @@
 // then direct copies of verified local images. Original benchmark files remain untouched.
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { readFileSync, existsSync, mkdirSync, writeFileSync, copyFileSync, statSync, renameSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, copyFileSync, statSync, renameSync, constants } from 'node:fs';
+import {createHash} from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
@@ -24,7 +25,7 @@ import {listFolderItems,hashEagleFile,readCurrentEagleProduct} from './eagle-cur
 import {makeMap,saveMap} from './eagle-product-map.mjs';
 import {mirrorEagleMap} from './eagle-map-mirror.mjs';
 import {processV3ImportedImages,eagleV2GetById} from './v3-eagle-import.mjs';
-import {visibleEagleItemCount,syncV3StitchPartsToIndex} from './v3-fingerprint.mjs';
+import {visibleEagleItemCount,syncV3StitchPartsToIndex,assertFingerprintInventory} from './v3-fingerprint.mjs';
 import {createV3ReadbackRpc} from './v3-web-readback.mjs';
 import {syncIndustryAfterProductComplete} from './industry-eagle.mjs';
 import {classifyProductTitle,isConfidentClassification} from './industry-core.mjs';
@@ -88,9 +89,10 @@ function copyAssets(receipt, destRoot) {
     try {
       mkdirSync(dirname(dest), { recursive: true });
       if (existsSync(dest)) {
-        if (statSync(dest).size !== statSync(item.filePath).size) throw Error('Destination file conflict');
+        const hash=p=>createHash('sha256').update(readFileSync(p)).digest('hex');
+        if (hash(dest)!==hash(item.filePath)) throw Error('Destination content conflict');
       } else {
-        copyFileSync(item.filePath, dest);
+        copyFileSync(item.filePath, dest, constants.COPYFILE_EXCL);
       }
       if (statSync(dest).size === 0 || statSync(dest).size !== statSync(item.filePath).size) throw Error('Copy invalid');
       copied++;
@@ -205,6 +207,7 @@ const receipt = resumeExisting ? {
   ...(v3Capture?{captureVersion:'v3.1-experimental'}:{}),
   timings:{}, errors:[], copied:0
 };
+receipt.storageMode=receipt.storageMode||storageModeFromConfig(config);
 receipt.autoStitchEnabled = config.autoStitch !== false;
 if (resumeExisting) delete receipt.debug;
 const save = () => {if(!dryRun)receiptSave(receiptPath, receipt)};
@@ -476,19 +479,7 @@ const effectiveIndustryCode=isConfidentClassification(effectiveIndustryClassific
 let v3ReadbackRpc=null;
 const canonical='https://detail.tmall.com/item.htm?id='+productId+(skuId?'&skuId='+skuId:'');
 async function eagleRpc(name, params={}, limit=30000){
-  const response=await fetch(eagleUrl,{
-    method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json, text/event-stream'},
-    body:JSON.stringify({jsonrpc:'2.0',id:Math.floor(Math.random()*1000000)+1000,
-      method:'tools/call',params:{name,arguments:params}}),
-    signal:AbortSignal.timeout(limit)});
-  if(!response.ok)throw Error('Eagle HTTP '+response.status);
-  const raw=await response.text(),line=raw.split(/\r?\n/).find(v=>v.startsWith('data:'));
-  const rpc=JSON.parse(line?line.slice(5).trim():raw);
-  if(rpc.error||rpc.result?.isError)throw Error('Eagle MCP '+JSON.stringify(rpc.error||rpc.result).slice(0,500));
-  const body=rpc.result?.content?.find(x=>x.type==='text')?.text||'{}';
-  const payload=JSON.parse(body);
-  if(payload.success===false)throw Error('Eagle '+name+' '+body.slice(0,400));
-  return payload.data??payload;
+  return eagleArchiveRpc(eagleUrl,name,params,limit);
 }
 try {
   // This is a non-idempotent operation. Persist "may have submitted" BEFORE the call.
@@ -507,7 +498,7 @@ try {
       root,productId,url:canonical,images:receipt.images,libraryPath:app.libraryPath,
       folderIds:folders,indexPath,
       linkFolders:(ids,fids)=>eagleRpc('item_add_to_folders',{ids,folders:fids},60000),
-      checkLibrary:async()=>visibleEagleItemCount()
+      checkLibrary:async()=>visibleEagleItemCount(),checkInventory:assertFingerprintInventory
     });
     receipt.images=imported.images;
     receipt.eagle='verified';
@@ -592,7 +583,7 @@ try {
   receipt.errors.push('Eagle: '+String(e?.message||e));
   receipt.eagle='uncertain_no_retry';
 }
-const storageMode=storageModeFromConfig(config);
+const storageMode=receipt.storageMode;
 receipt.storageMode=storageMode;
 receipt.phase=storageMode==='copy'?'copying':'eagle_only';
 save();
@@ -603,7 +594,7 @@ if(storageMode==='copy'){
   receipt.localStatus=copies.copied===receipt.images.length&&!copies.errors.length?'complete':'incomplete';
   if(receipt.phase==='success'){
     try{receipt.postprocess={...receipt.postprocess,html:generateDetailPreview(join(copies.destination,'detail'),{productId})};}
-    catch(e){receipt.postprocess={...receipt.postprocess,html:{status:'failed',error:String(e.message||e)}};}
+    catch(e){receipt.postprocess={...receipt.postprocess,html:{status:'failed',error:String(e.message||e)}};receipt.phase='incomplete';receipt.localStatus='incomplete';receipt.errors.push('HTML: '+e.message);}
   }
 }else{
   Object.assign(receipt,eagleOnlyReceiptState(receipt,destRoot));

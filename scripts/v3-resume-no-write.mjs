@@ -5,9 +5,10 @@ import{readFileSync,existsSync,mkdirSync,writeFileSync}from'node:fs';
 import{resolve,join,dirname}from'node:path';
 import{fileURLToPath}from'node:url';
 import{randomUUID}from'node:crypto';
-import{acquireProductLock}from'./capture-store.mjs';
+import{acquireProductLock,readRegistry}from'./capture-store.mjs';
+import{verifyDeliveryMode}from'./copy-delivery.mjs';
 import{loadJob,assertNoWriteResume}from'./v3-job-state.mjs';
-import{visibleEagleItemCount,openFingerprintDatabase,syncV3StitchPartsToIndex}from'./v3-fingerprint.mjs';
+import{visibleEagleItemCount,openFingerprintDatabase,syncV3StitchPartsToIndex,assertFingerprintInventory}from'./v3-fingerprint.mjs';
 import{processV3ImportedImages,eagleV2GetById}from'./v3-eagle-import.mjs';
 import{eagleArchiveRpc,ensureEagleProductFolders,archiveEagleProduct,ECOM_ARCHIVE_ROOT}from'./eagle-archive.mjs';
 import{createV3ReadbackRpc}from'./v3-web-readback.mjs';
@@ -53,7 +54,7 @@ try{
  const imported=await processV3ImportedImages({root,productId:id,url,images:receipt.images,
    libraryPath:app.libraryPath,folderIds:folders,indexPath,resumeNoWrite:true,
    linkFolders:(ids,fids)=>rpc('item_add_to_folders',{ids,folders:fids}),
-   checkLibrary:visibleEagleItemCount});
+   checkLibrary:visibleEagleItemCount,checkInventory:assertFingerprintInventory});
  if(imported.status!=='verified'||imported.images.length!==receipt.images.length)
    throw Error('Incomplete V3 import result');
  const readRpc=createV3ReadbackRpc({eagleMcpUrl:cfg.eagleMcpUrl,libraryPath:app.libraryPath});
@@ -69,6 +70,8 @@ try{
  const saved=saveMap(root,map);
  const mirrored=await mirrorEagleMap({rpc:readRpc,map,apply:true});
  if(mirrored.status!=='complete')throw Error('Cannot verify Eagle mapping mirror');
+ const delivery=await verifyDeliveryMode(current,receipt,readRegistry(root).products[id],{apply:true});
+ if(delivery.status!=='complete')throw Error('Recorded storage-mode delivery incomplete');
  if(!process.env.STITCH_FFMPEG&&cfg.ffmpegExecutablePath)
    process.env.STITCH_FFMPEG=cfg.ffmpegExecutablePath;
  if(!process.env.STITCH_FFPROBE&&cfg.ffprobeExecutablePath)
@@ -84,7 +87,7 @@ try{
    throw Error('Recovered source images complete but long image still needs review: '+stitch.status);
  const report={status:'complete',productId:id,main:preflight.main,detail:preflight.detail,
    verified:imported.images.length,archive:archive.status,map:map.status,mirror:mirrored.status,
-   longStatus:stitch.status,indexSync,originalReceiptModified:false,
+   longStatus:stitch.status,indexSync,delivery,originalReceiptModified:false,
    registryNeedsVerifyLiveApply:true,at:new Date().toISOString()};
  const dir=join(root,'data','reconciliations');mkdirSync(dir,{recursive:true});
  const file=join(dir,'v3-recovered-'+id+'-'+new Date().toISOString().replace(/[:.]/g,'-')+'-'+randomUUID().slice(0,6)+'.json');

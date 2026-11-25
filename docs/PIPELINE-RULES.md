@@ -17,7 +17,7 @@ node scripts/ecom.mjs capture "<完整天猫URL>" "D:\素材"     # 用户指定
 
 1. **首次导航必须传递用户提供的完整原始 URL。** 保留 `ali_refid`、`ali_trackid`、`spm` 等参数；只允许将 ID/SKU 规范化后用于商品索引和 Eagle `website` 元数据，不允许用简化 URL 代替网页导航。
 2. 商品图片由 **Eagle MCP 的有日志分批 `item_add`** 负责常规下载和归档，每批最多 8 张，每张原图只提交一次；随后 `item_get` 根据 **商品图片位置 + itemId + 物理文件** 验证；新入库素材仍核对名称，Eagle「使用原图」则核对原 itemId 的真实分类关联与可读取性，严禁按数组顺序匹配。提交结果不明时保留批次日志，禁止自动重传。
-3. `item_get` 可能存在索引延迟：只读等待、有限重查，不可直接重发 `item_add`。**PC1 实测 Eagle「重复添加提示」会在用户选择前让相同原图内容的新导入处于待处理状态；MCP 返回成功 ID 不等于实体落库**。对缺少 `.info` 实体的条目保留不完整与证据，先检查 Eagle 是否有待处理重复弹窗，再按具体任务授权决定「保留两者」或取消；严禁脚本盲目重复提交、批量覆盖既有素材。
+3. `item_get` 可能存在索引延迟：只读等待、有限重查，不可直接重发 `item_add`。**PC1 实测 Eagle「重复添加提示」会在用户选择前让相同原图内容的新导入处于待处理状态；MCP 返回成功 ID 不等于实体落库**。对缺少 `.info` 实体的条目保留不完整与证据，先检查 Eagle 是否有待处理重复弹窗，优先在授权范围内复用已有原图，核验真实 item ID、目录与 SHA-256；GUI 弹窗控件识别需单独实测，不依赖固定坐标或默认点击；严禁脚本盲目重复提交、批量覆盖既有素材。
 4. **脚本直连只是例外补救**：必须已有 `partially_verified` 回执，先读 Eagle 查重，按产品任务累计最多 **10 张**，不得使 Eagle 未启动时变成主采集路径。使用独立命令显式执行；不得自动绕过 `item_add`。
 5. 禁止缺失图片、未加载详情、访问异常时提前提交 Eagle；要保留任务拥有的商品标签。不要代替浏览器解决登录/验证码/风控限制。
 6. 已有回执时禁止新建同一商品重复入库，按错误阶段选择恢复命令；同一商品独占锁，不同商品可并行。
@@ -40,26 +40,26 @@ node scripts/ecom.mjs capture "<完整天猫URL>" "D:\素材"     # 用户指定
 - 历史商品先 `ecom reconcile-reused <ID> --check`，仅能以真实当前分类关联与已核实内容等证据恢复，再 `--apply` 保存映射；已完整商品可 `ecom map-eagle <ID> --check|--apply` 建立及镜像映射。不需要重采，也不修改历史 receipt。原格式重新编码仅保留为明确授权的特殊补救方法，**不是自动默认路径**。
 - 这些映射绑定各电脑自己的 Eagle 素材库。PC2 的 `data/`、文件夹描述和 itemId **不通过 Git 同步到 PC1**，PC1 需单独核验和生成映射。
 
-## V3.1 可切换实验链路（未通过真实新图入库验收，不改变 V2 默认）
+## V3.1 可切换实验链路（PC2 真机验收通过，跨机与异常场景仍需回归，不改变 V2 默认）
 
 - 默认 `ecom capture` 继续使用 V2；V3 仅在本机 `config/local.json` 显式设定 `v3Experimental: true` 后，才允许使用 `ecom capture-v3 "<完整商品 URL>"`。不自动打开此开关。
 - V3 指纹索引：`ecom v3-index --check [抽样数]` 只读；`ecom v3-index --build` 扫描 Eagle 当前素材并写入**本机** `data/fingerprints/v3-eagle.sqlite`。需 Node.js 24+；V2 仍保留原来的 Node 20.19+ 约束。不同电脑、Eagle 库、ID 不跨设备复制索引。
 - V3 预取诊断：`ecom v3-prefetch --check <已采商品ID>` 以浏览器一致性请求头读取 CDN 图片字节并与本机哈希索引比对，**不写入 Eagle**；`--cache` 只保存本项目 `data/v3-cache` 供调试，不导入 Eagle。CDN 返回格式与 URL 所标注编码不符时停下，不能直接认定为新素材。
 - 正式 V3 任务先完整读取所有图片原始字节，再在 Eagle 本库锁下逐张执行：哈希精确匹配 → 当前 Web API 元数据 + 真实文件 SHA 校验 → 已有 ID 增加文件夹归属；未命中则将**同一份缓存原图**通过 Eagle Web API V2 `item/add(path)` 单次导入。不要修改旧原图的名称、元数据或文件内容。
 - V3 `data/v3-jobs` 独立日志在任何官方写入之前持久化提交意图。遇到超时、接口不一致或不明结果即停止；不因为更换 API/MCP 通道而重发。整单成功以逻辑图片位置、文件夹、SHA-256 与后处理的独立验证为准。缓存暂不自动清理。
-- 正式采集的 Web API V2 只读来源为当前本机 Eagle 41595；MCP 41596 继续承担文件夹与关联写入，V3 的读回可以使用 V2 元数据加独立物理文件校验，避免仅因 MCP 搜索延迟判缺图。入库前检查全库数量与索引新鲜度；资源库发生外部变化时不冒险导入。
-- 已通过 PC2 五商品真机试验：150 个逻辑位置完整、19 个位置完全复用 Eagle 原图，五张 750px 长图独立验证。仅当 V3 日志可证明零 Eagle 写入时允许使用 `ecom v3-resume --check|--apply <ID>`；原始回执不可重写，未知提交禁止重复调用。
+- 正式采集的 Web API V2 只读来源为当前本机 Eagle 41595；MCP 41596 继续承担文件夹与关联写入，V3 的读回可以使用 V2 元数据加独立物理文件校验，避免仅因 MCP 搜索延迟判缺图。每个正式商品或恢复任务前刷新索引；入库前比对全库图片 ID、物理文件大小、修改时间和数量，后续每次写入前检查库数量，精确命中项独立复核 SHA-256；同数量替换也会阻断预检。资源库发生外部变化时不冒险导入。
+- 已通过 PC2 五商品真机试验：150 个逻辑位置完整、19 个位置完全复用 Eagle 原图，五张 750px 长图独立验证。仅当 V3 日志可证明零 Eagle 写入时允许使用 `ecom v3-resume --check|--apply <ID>`；原始回执不可重写，未知提交禁止重复调用。`ecom v3-resume-partial --check|--apply <ID> [原始完整URL]` 可恢复有提交历史的任务：V2 必须有可核对的提交前缀与显式未提交尾部；V3 必须有一致的独立事件日志。所有已提交位置先按真实 item ID、目标目录和 SHA-256 独立验证，只有明确未提交位置可新增写入。首次 V2 恢复提供原始完整 URL；只读预检通过后才执行。PC2 AA 实测 6/6 商品、301/301 位置、6/6 长图，其中 3 个 V2 历史任务保护 32 个既有位置、补齐 126 个未提交位置。
 - 指纹索引的库存数量统一使用 `/api/v2/item/get` 所报告的可见素材 `total`，不要混用语义不同的 `countAll`；每次 Eagle 长图上传成功后将经 SHA 校验的成品纳入同一索引。外部认证资料图片要与真实商家详情图区分；CDN 实际编码与 URL 扩展名不同时，只有多次有界预取均返回相同原始字节且 MIME 有效才允许使用并记录格式差异，禁止隐式转码。
-- V2 的 Eagle 分批导入发现任一批次不确定后立即停止后续批次，余下图片位置标为 `not_submitted_due_to_prior_uncertain_batch`，保留旧回执及其序号，不自动重试。未确认 V3 E2E 之前不可把 V3 改成默认生产采集流程。
+- V2 的 Eagle 分批导入发现任一批次不确定后立即停止后续批次，余下图片位置标为 `not_submitted_due_to_prior_uncertain_batch`，保留旧回执及其序号，不自动重试。PC2 新 V3 队列真实 E2E 已通过，仍需 PC1/独立环境及异常场景回归和用户决定后才可切换默认生产采集流程。
 
 ## 商品级行业分类独立阶段
 
 - 商品唯一分类来源为 data/captures.json.products[商品ID].classification，包含行业/子类编码、规则版本、证据、来源和人工锁定。原始 receipt 与历史淘宝 URL 不改写。分类不等于采集完整性。
 - 商品标题按确切产品名词分类，AV、3C、mini 等泛词不作为行业依据；冲突或未知则 needs_review。人工锁定分类高于自动规则；本版无需 LLM API。
 - ecom industry --check 只读预览；--apply 只修改业务分类；--list 查询；--set 手工改类并锁定；--sync-eagle 联动。原有 capture 与 verify-live --apply 只在完整商品验收后尝试自动联动，联动失败不影响采集状态。
-- Eagle 通过带命名空间的 采集行业｜... / 采集子类｜... 标签与原生 Smart Folder 展示。只对独立验证过的商品首张 750px 长图设置标签；不导入或移动原图，不修改用户其它标签和文件夹。子类 Smart Folder 采用双标签筛选。
-- Smart Folder 必须带本项目描述标识 ecom-image-capture:industry-v1:；同名非本项目目录不覆盖。Eagle 写入前记录 data/industry-sync 事件，未知结果停止并只读复核，禁止盲目重复创建。
-- 未完成长图商品只登记行业，分类待同步状态不影响继续补图、去重和长图流程；PC1/PC2 各自维护 Eagle itemId 和智能文件夹，不跨机器复制元数据。
+- Eagle 仅同步带命名空间的 `采集行业｜...` / `采集子类｜...` 标签。只对独立验证过的商品首张 750px 长图设置标签；不导入或移动原图，不修改用户其它标签和文件夹。所有采集、验收、恢复及手动分类入口禁止自动创建或依赖行业 Smart Folder；`industrySync.status=synced` 表示标签已读回验证（`smartFolders: retired`，`smartFolderIds: []`）。
+- 历史行业 Smart Folder 仅保留只读识别逻辑。本项目描述标识为 `ecom-image-capture:industry-v1:`；清理前必须核实具体 ID、父子关系、筛选条件和成员，保存快照，经明确授权后使用 Eagle 官方智能视图操作逐项移除。禁止普通文件夹/素材删除、直接修改素材库底层文件和盲目重复未知写入。标签写入前记录 `data/industry-sync` 事件并以 `industry_tags_verified` 验收。
+- 未完成长图商品只登记行业，分类待同步状态不影响继续补图、去重和长图流程；PC1/PC2 各自维护 Eagle itemId、标签和历史智能视图清理证据，不跨机器复制元数据。
 
 ## Eagle 实体行业层级（当前主归档结构）
 
@@ -68,17 +68,18 @@ node scripts/ecom.mjs capture "<完整天猫URL>" "D:\素材"     # 用户指定
 - `scripts/eagle-folder-layout.mjs` 为唯一旧/新层级解析器；归档、补图、长图、V2/V3 路径均复用它。若同一商品 ID 出现在两个位置、行业目录名未知或行业 ID 冲突，必须停止并人工核验，禁止自动再创建同名商品目录。
 - `ecom industry-folders --check [ID]` 只读；`--apply <ID>` 单商品迁移；`--apply --all` 将未归位商品逐个移动；`--rollback ID` 为只读回退资格检查，只有单独显式 `--rollback ID --apply` 才执行回退。任何真实移动都先在 `data/migrations/industry` 保存原父目录、商品/主图/详情文件夹 ID、商品根目录长图与源图片 itemId 集合，并在 `move_intent` 前持久化。RPC 结果不确定后只读复核，绝不直接重发。
 - 迁移期间使用 `data/locks/industry-layout.lock`（独立保存归档历史）与 Eagle 资源库写入锁；已有正在处理的商品锁阻止迁移。旧版 `migrate-eagle` 仅合并日期根目录，已兼容行业嵌套，不能将商品展平回旧目录。
-- `ecom industry --apply` 仍只更新分类元数据；`industry --set ID industryCode subcategoryCode` 会先保存人工锁定，再迁移已有商品目录，最后同步可用的智能文件夹标签。若移动不明，分类登记保留为待同步，不重复调用 Eagle。
-- Eagle 原生智能文件夹和仅标记已验收长图的标签保留为**辅助筛选入口**，不是商品实体归档的替代品。未来恢复/手工同步行业目录必须使用 `industry-folders` 命令。
+- `ecom industry --apply` 仍只更新分类元数据；`industry --set ID industryCode subcategoryCode` 会先保存人工锁定，再迁移已有商品目录，最后同步可用的长图行业及子类标签。若移动不明，分类登记保留为待同步，不重复调用 Eagle。
+- **唯一目录展示为商品实体行业层级**。仅标记已验收长图的标签保留为辅助筛选元数据；禁止重新启用项目自动创建行业智能文件夹的旧逻辑。恢复/手工同步行业目录必须使用 `industry-folders` 命令。
 - 新商品在页图读取完成后，按照人工锁定/规则识别结果选择行业并直接创建目标商品文件夹，不能先创建旧根级目录再移动。真实新商品再次完成采集的全链路验收仍属于发布回归，不能由目录模拟测试替代。
 
 ## 批量采集与当前状态对账
 
-- `node scripts/ecom.mjs batch "链接清单.txt" --check`：UTF-8 每行完整 URL 或 JSON 字符串数组，最多 40 项；验证重复商品 ID 与已有回执，**只读**。
-- `node scripts/ecom.mjs batch "链接清单.txt" --apply`：逐单调用正式采集入口，每次提交意图写入独立 `data/batches/` 日志；新商品失败不影响其他新商品，但**绝不重试已提交 Eagle 的商品，也不自动重采不完整回执**。
+- `node scripts/ecom.mjs batch "链接清单.txt" --check [--engine v2|v3]`：UTF-8 每行完整 URL 或 JSON 字符串数组，最多 40 项；验证重复商品 ID、SKU、已有回执和跨批次未决任务，**只读**。不同或不明确 SKU 进入待检查，不合并到已有商品目录。V2 默认；V3 须本机显式启用且 Node 24+。
+- `node scripts/ecom.mjs batch "链接清单.txt" --apply [--engine v2|v3]`：串行调度，持久化输入 SHA、引擎与各商品意图；V3 每个正式商品和受控恢复前刷新索引。仅在子进程正常退出、回执/事件日志支持并且只读恢复预检通过时，允许一次逐位置恢复，不再运行原 capture。已完成同 SKU 商品也先现场验收。跨批次未决写入、活跃/未知商品锁、共享服务故障、未知退出和验收失败熔断；后续标记 `not_started_due_to_batch_halt`。多个未决任务时先独立安全恢复，不跳过障碍。读取重查仅限已知只读 API 的瞬态网络及 HTTP 错误，总预算内最多三次；Eagle 写入一律单次，保留请求操作、路由、阶段、超时与底层 cause。批次外层不再叠加固定一小时超时，子流程预算分别 600s/900s/240s/310s，宿主中断仍须检查持久化日志及实际进程。PC2 BB 两批 4 个新商品真实执行均完成：161 个位置、4 张长图；首个商品因 FFprobe 超时自动进入 postprocess_only，保持原图及原回执并成功补齐长图。两次遇到活跃批次锁时检查到同一批次正在执行，未重发；最终批次锁均正常释放。
 - 新商品页面导航后 Chrome 执行上下文临时失效时，仅在原商品标签页进行有限次数 `evaluate_script` 重查；不重新打开商品、不重复提交 Eagle。
 - `node scripts/ecom.mjs recover-duplicates <ID> --check|--apply`：**独立显式操作**，仅对 Eagle 部分验证且已有合规本地补图、数量不超过 10 的商品；核验 Eagle 全库完全相同的 SHA-256、旧提交 itemId 物理缺失、GIF 帧数/时序和像素后才可生成不同文件哈希的副本并单张回存。若提交结果不明确，保留独立日志停止，不自动重试。仅支持可证明无损处理的格式。
-- `node scripts/ecom.mjs verify-live <ID> --check|--apply`：重新验证 Eagle 原始素材与长图实体、尺寸和 SHA-256。只有完整才更新本地 `captures.json` 的最新完成状态；**历史 receipt 不改写**。
+- `node scripts/ecom.mjs verify-live <ID> --check|--apply`：重新验证 Eagle 原始素材与长图实体、尺寸和 SHA-256，并按原回执/登记的存储模式验收；copy 模式还须本地编号图片哈希和离线 HTML 一致。只有完整才更新本地 `captures.json` 的最新完成状态；**历史 receipt 不改写**。
+- `source-closeout AA|BB --check|--prepare` 分别只读检查/保存本机快照；`--apply <snapshotId>` 仅对快照中已独立验收的来源项增加目标关联并解除指定来源关联，记录逐项 intent/readback。目录名大小写不敏感且必须唯一，实际 ID 不变；未确认、未入快照或后续新增的项保留。禁止删除原文件或重复不明关联写入。PC2 BB 非空文件夹实测 4 个来源项已具备目标关联，解除来源关联后逐项核实原 ID、SHA-256、目标关联与商品交付，剩余 0 项。
 
 ## 产物结构
 

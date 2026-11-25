@@ -7,7 +7,7 @@ import {fileURLToPath} from 'node:url';
 const marker='<!-- ecom-image-capture:generated-preview:v1 -->';
 const escapeHtml=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
-export function generateDetailPreview(detailDir,{productId,force=false}={}){
+export function generateDetailPreview(detailDir,{productId,force=false,checkOnly=false}={}){
   const dir=resolve(detailDir);
   if(!existsSync(dir))throw Error('Detail image directory does not exist: '+dir);
   const images=readdirSync(dir).map(name=>{
@@ -51,7 +51,9 @@ ${marker}
     const old=readFileSync(path,'utf8');
     if(old===html)return {status:'unchanged',path,images:images.length};
     if(!old.includes(marker)&&!force)throw Error('Existing hand-edited HTML.html; explicit --force required');
+    if(checkOnly)return {status:'needs_update',path,images:images.length};
   }
+  if(checkOnly)return {status:'missing',path,images:images.length};
   writeFileSync(path,html,{encoding:'utf8',flag:existsSync(path)?'w':'wx'});
   return {status:'generated',path,images:images.length};
 }

@@ -30,7 +30,7 @@
 7. PC2 真实案例：Eagle 返回 itemId 或 GUI 显示并不足以证明实体落库；必须 `item_get` + `.info` 文件存在、尺寸/哈希核验。遇到回存日志 `submitting` 与空实体时，停止所有自动重试。已发现同一图片内容可能存在于**其它商品**目录，Eagle 全库去重/已有素材引用可能导致原商品缺图与错误分类；只比对当前商品内部素材不足以排除重复。不要将另一个商品的图片直接重命名、覆盖或强制重新导入，也不要在没有独立商品序号映射的情况下把旧商品命名的素材算作本商品完整。
 8. 当前 Eagle 归档路径为 `电商平台批量采集/<一级行业>/<ID>/主图|详情页`；旧日期路径仅供历史定位。PC2 29 个商品已使用官方 `folder_update(parentId)` 整体迁移，商品目录及其主图/详情目录 ID 未变。原始图片不重采、不复制，长图仍在商品 ID 根目录。
 9. V2 的跨商品完全重复文件（GIF、PNG、JPG 或静态 WebP）可在受控直连本地补图（每商品≤10 张）后，使用 `ecom recover-duplicates <ID> --check` 做 Eagle 全库 SHA-256 对照及旧 itemId 物理缺失检查；只有确认可恢复才显式执行 `--apply`。副本改变字节哈希但须保留 GIF 动画帧、时序和真实像素；任意未知提交结果都停止。不能以此断定 Eagle 内部去重算法已被完全定位。
-10. 已核验原图和长图、但历史 `data/captures.json` 仍标记不完整时，使用 `ecom verify-live <ID> --check` 再 `--apply` 更新当前索引状态，保留原始失败回执。批量任务使用 `ecom batch <urls.txt> --check|--apply`；有回执的商品均跳过，绝不覆盖旧回执重采。
+10. 已核验原图和长图、但历史 `data/captures.json` 仍标记不完整时，使用 `ecom verify-live <ID> --check` 再 `--apply` 更新当前索引状态，保留原始失败回执。批量任务使用 `ecom batch <urls.txt> --check|--apply`；已有完整同 SKU 商品先独立复核；不完整商品不得重新采集，显式 V3 批次仅允许符合下文证据条件的受控恢复，绝不覆盖旧回执重采。
 
 ## Eagle「使用原图」的优先恢复路径
 
@@ -50,14 +50,18 @@
 - 若外部 Eagle 库数量变化、索引非完整、CDN 返回编码变化、缓存被篡改或 GIF 动画不符，停止影响的导入部分。重新建立本地只读索引后再重新评审，不能自动重复已提交的请求。
 - 用户历史商品 `1005836374256` 的 V2 原始回执与失败证据保留；即使 P0 已找到被复用的原始 GIF，正式完成状态仍以 `reconcile-reused` 映射、`archive --check` 和详情长图实物检查为准，不可只凭指纹匹配宣布完整。
 - V3 有独立 `ecom v3-resume --check|--apply <商品ID>`：只有原始回执存在、完整事件日志证明**从未调用 Eagle 导入或关联写入**、商品图片序号和 URL 一致、Eagle 当前索引数量与缓存匹配，才允许基于同一商品安全继续；已提交过任何 `import_intent` / `reuse_link_intent` 一律拒绝重试。原始失败回执不改写；收尾仍需 `verify-live --check`，完整后 `--apply` 更新登记。
-- `ecom capture-v3` 仍处于实验开关关闭状态。PC2 五商品的原始字节复用、入库与长图已通过真实端到端测试，但跨主机、并发及不确定写入恢复等生产级场景仍未全部验证；不因此开启默认 V3，也不清理真实原图或历史映射。
+- 新增 `ecom v3-resume-partial --check <ID> [原始完整URL]` 与对应 `--apply`：支持严格可证的 V2 部分提交（首次须完整原 URL）以及 V3 部分任务。先 `v3-index --build`，检查日志、回执、SKU、目录、缓存和当前库；所有旧提交位置必须先取得确定的物理文件、SHA-256 与目标目录关联。只有明确没有提交意图的剩余位置允许写入；未知旧提交不能重新调用，即使 API 通道改变也不能。`--check` 不写 Eagle。完成后单独 `verify-live <ID> --check` / `--apply` 更新当前登记；原始 receipt 不改写。
+- V3 的部分恢复入口若全部原图位置在持久化事件中已验证，按原 ID/哈希/目录重建并核验商品映射，报告 `resumeStage: postprocess_only`，不重新预取或进入原图导入。copy 模式仅补齐缺少的本地副本和项目生成的 HTML，冲突文件和人工 HTML 不覆盖；eagle 模式无本地副本要求。`verify-live` 独立验收交付后才登记完成。
+- 长图 `rendering.json` 证明仅处在渲染阶段时，可在新子目录重新渲染，旧文件保留；存在 `submission.json` 时，已提交部分必须由实际名称、ID（已知时）、尺寸和 SHA-256 证明；结果不明时不得重发，只允许确证从未提交的 prepared 部分继续。没有有效标记的历史冲突仍须人工对账。
+- V3 批次遇到可恢复失败最多走一次 `v3-resume-partial` 的检查与应用，完成后独立 `verify-live`；子进程超时、仍在运行、无证据或跨批次未决任务时熔断。2026-11-24 BB 真实批次中 FFprobe 渲染超时发生在长图提交前，队列自动刷新索引并检查 postprocess_only 后安全补齐长图，38 个原图位置与原回执哈希均保持。外层调用返回活跃批次锁时，应按既有进程与日志回读，绝不因调用结果异常启动重复批次。来源收尾的 `data/source-closeout` 快照和事件日志须保留，关联写入失败以实际目标/来源关联和实体哈希只读核对，禁止直接重复提交。
+- `ecom capture-v3` 仍处于实验开关关闭状态。PC2 五商品试验及 2026-11-24 AA 六商品真实收尾（301 个图片位置、6 张长图）通过，V2 部分提交续采与 V3 零写入恢复也已实测；BB 4 个新商品（161 个位置、4 张长图）通过新版 V3 两批真实采集，且实际 FFprobe 超时的仅后处理自动恢复及非空 BB 来源快照收尾已通过；不确定写入的逐位置恢复通过模拟回归，但跨主机、并发和真实丢失提交响应场景仍未全部验证；不因此开启默认 V3，也不清理真实原图或历史映射。
 
 ## 行业分类异常恢复
 
-- 先执行 ecom industry --check [ID] 检查商品级分类，再用 --sync-eagle [ID] 恢复已验收商品的 Eagle 显示。禁止将分类异常当作缺图重新采集。
+- 先执行 ecom industry --check [ID] 检查商品级分类，再用 --sync-eagle [ID] 恢复已验收商品的 Eagle 行业/子类标签；不创建智能文件夹。禁止将分类异常当作缺图重新采集。
 - 人工更正：ecom industry --set <ID> <industryCode> <subcategoryCode>，写入人工锁定。只移除本项目的旧行业标签，保留全部其它 Eagle 标签和原始图片。
 - incomplete 或没有已验收长图的商品返回 pending_long_image，分类可登记但不得发布代表图；未知商品名词为 needs_review，自动采集仍正常。
-- Eagle Smart Folder 或标签写入结果不明时，先核查 data/industry-sync/<ID>.events.jsonl 与当前 Eagle 标签、Smart Folder ID；未确定前不重新执行不确定写入。
+- Eagle 标签写入结果不明时，先核查 `data/industry-sync/<ID>.events.jsonl` 与当前 Eagle 标签；未确定前不重新执行不确定写入。旧行业 Smart Folder 已停用自动创建；历史视图清理或回退仅在明确授权、独立快照和官方操作验证下进行，不通过重复采集恢复视图。
 - 分类前的商品登记快照保存于 runtime/industry-backups，恢复只针对受影响分类字段，保留期间其它采集信息修改。
 
 ## 商品行业文件夹迁移恢复
@@ -65,7 +69,7 @@
 - 行业主目录现为 `电商平台批量采集/<一级行业>/<商品ID>/主图|详情页`。迁移时保存 `data/migrations/industry/<商品ID>-*.json`，含原父目录 ID、目标父目录 ID、商品目录与主图/详情目录 ID、根目录及子目录的原 itemId 集合。
 - 如果 `folder_update` RPC 中断、不确定或存在 `move_intent` 但缺少 `move_verified`，先 `ecom industry-folders --check <ID>` 和 Eagle 当前 `folder_get`，再人工核对该迁移快照；**不要重新调用 --apply 或尝试第二次移动**。其他商品无需因此重采。
 - 回退前先执行 `ecom industry-folders --rollback <ID>`（只读），确认当前父目录、原目录 ID、原 itemId 关联与迁移快照一致；只有另行显式执行 `--rollback <ID> --apply` 才会将商品文件夹移回原父目录，且保留已创建的行业目录，不做删除清理。回退后分类数据仍是原行业，可能暂时存在位置不一致，后续需统一补正。
-- 人工重新分类 `ecom industry --set ID industry subcategory` 现会移动整个商品目录；写入失败时保留人工分类与待同步标记，不可误报全流程完成。Eagle Smart Folder 仅辅助筛选，不需要重新生成长图或重复导入原图。
+- 人工重新分类 `ecom industry --set ID industry subcategory` 现会移动整个商品目录；写入失败时保留人工分类与待同步标记，不可误报全流程完成。行业/子类标签仅辅助筛选，旧行业 Smart Folder 不再创建；不需要重新生成长图或重复导入原图。
 
 ## 常用只读命令
 

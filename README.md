@@ -37,7 +37,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -InstallSy
 
 ## 行业自动分类（无需重新采集）
 
-商品标题用于识别一级行业与二级类目；分类的唯一业务来源仍是 `data/captures.json`。**Eagle 实际目录结构已改为 `电商平台批量采集/<行业>/<商品ID>/主图|详情页`**：整体调整商品文件夹的父级，保留商品文件夹 ID、主图/详情子目录 ID、原图与长图 itemId；不复制图片，不移动 Eagle 库底层实体文件。无法确定行业的新商品进入「待分类」。原有 Eagle 智能文件夹和长图标签保留为辅助筛选，不是新的主分类结构。
+商品标题用于识别一级行业与二级类目；分类的唯一业务来源仍是 `data/captures.json`。**Eagle 实际目录结构已改为 `电商平台批量采集/<行业>/<商品ID>/主图|详情页`**：整体调整商品文件夹的父级，保留商品文件夹 ID、主图/详情子目录 ID、原图与长图 itemId；不复制图片，不移动 Eagle 库底层实体文件。无法确定行业的新商品进入「待分类」。长图行业/子类标签保留为辅助筛选；不再自动创建或依赖 Eagle 行业智能文件夹（包括 `采集行业｜...` 及其子类）。历史项目智能视图需经授权和只读核验后单独清理，不删除任何素材。
 
 常用命令：
 ```powershell
@@ -61,17 +61,31 @@ PC2 历史 29 个商品已整体迁移到行业实体目录：成人用品 19、
 
 ## V3.1 实验功能（默认关闭，非正式采集版本）
 
-新增 Eagle 全库原图 SHA-256 索引与内容一致性预检。PC2 已完成五个不同商品的真实 V3 采集测试：150 个图片位置全部通过独立核验（其中 131 张新增、19 张复用已有 Eagle 原图），5 张 750px 详情长图全部完整。V2 `capture` 不受影响。
+新增 Eagle 全库原图 SHA-256 索引与内容一致性预检。PC2 已完成五个不同商品的真实 V3 采集测试：150 个图片位置全部通过独立核验（其中 131 张新增、19 张复用已有 Eagle 原图），5 张 750px 详情长图全部完整。2026-11-24 AA 六商品进一步验证 301/301 图片位置、6/6 长图；三个 V2 历史任务保护 32 个已提交位置、补齐 126 个明确未提交位置。V2 `capture` 不受影响。
 
 ```powershell
+node scripts/ecom.mjs batch <链接清单> --check --engine v3 # 显式 V3 批次预检
+node scripts/ecom.mjs batch <链接清单> --apply --engine v3 # 受控采集及恢复
 node scripts/ecom.mjs v3-index --check 30              # 只读抽样
 node scripts/ecom.mjs v3-index --build                 # 仅写本机 SQLite 索引
 node scripts/ecom.mjs v3-prefetch --check <商品ID>      # 无 Eagle 写入，需已有回执
 node scripts/ecom.mjs v3-resume --check <商品ID>        # 仅检查零 Eagle 写入的失败任务
+node scripts/ecom.mjs v3-resume-partial --check <商品ID> [原始完整URL] # 逐位置安全恢复预检
+# 预检通过后才使用 v3-resume-partial --apply；首次 V2 恢复须提供完整原 URL
 node scripts/ecom.mjs v3-resume --apply <商品ID>        # 日志证明零提交后，安全继续并完成后处理
 ```
 
-V3 需要 Node.js 24+；项目 V2 最低要求不变。V3 正式导入命令 `capture-v3 "<完整URL>"` 需本机显式设置 `v3Experimental: true` 才可运行。**当前仍保持 V3 实验模式**：真实新增原图导入、跨商品复用、零提交安全恢复已通过五商品测试；仍需更广泛的异常写入、并发及跨机器回归才考虑默认切换。V3 的输入缓存、素材库锁和导入事件日志均位于被 Git 忽略的 `data/`。详见 `docs/PIPELINE-RULES.md` 和 `docs/RECOVERY.md`。
+V3 需要 Node.js 24+；项目 V2 最低要求不变。V3 正式导入命令 `capture-v3 "<完整URL>"` 需本机显式设置 `v3Experimental: true` 才可运行。**当前仍保持 V3 实验模式**：真实新增原图导入、跨商品复用、零提交安全恢复和 V2 历史部分提交恢复已通过 PC2 实测；仍需更广泛的异常写入、并发及跨机器回归才考虑默认切换。V3 的输入缓存、素材库锁和导入事件日志均位于被 Git 忽略的 `data/`。批次按商品与 SKU 检查身份；读取连接故障有限重查，写入不明绝不重发。新版批量入口已在 PC2 验证 3 个已有商品全部复核、0 新增导入，2026-11-24 新 V3 队列分两批采集 4 个新商品，161/161 图片位置、4/4 长图完整（149 个新增、12 个精确复用位置），一次 FFprobe 超时自动转入仅后处理恢复，原始回执保持不变；BB 4 个原始来源项快照收尾通过。PC1 实测、其他异常写入场景与独立 Windows 发行验收仍是默认切换/正式发布门槛。详见 `docs/PIPELINE-RULES.md` 和 `docs/RECOVERY.md`。
+
+## 来源文件夹自动收尾
+
+```powershell
+node scripts/ecom.mjs source-closeout AA --check
+node scripts/ecom.mjs source-closeout BB --prepare
+node scripts/ecom.mjs source-closeout BB --apply <snapshotId>
+```
+
+`--check` 只读，`--prepare` 保存不可变本机快照；只有 `--apply` 才改变快照中已完整验收的来源文件夹关联。AA/BB 名称大小写兼容但必须唯一。未完成项、新增项、旧分类及原文件均保留；不会采集新链接或删除原图。PC2 已实测非空 BB 收尾：4/4 来源解除关联，原素材 ID、SHA-256 和目标商品关联保持，剩余 0 项。
 
 ## 默认输出（`storageMode: copy`）
 
@@ -123,7 +137,7 @@ output/
 
 所有命令都有 JSON 输出，成功退出码 `0`，需要用户/Agent 操作时 `10`，失败且不可盲目重试时 `2`。需要脚本集成时也可直接运行 `node scripts/ecom.mjs ...`。底层原始脚本继续保留供高级维护。
 
-**批量清单**：UTF-8 文本文件，每行一条完整原始天猫商品 URL；也接受 JSON 字符串数组。批量队列顺序处理、逐商品保存回执；已采集成功或已有不完整回执的商品一律跳过，不会自动重新提交。对少量确认与全库素材完全相同的缺图，可先执行受控 `recover-direct`，再显式使用 `recover-duplicates` 进行内容一致而文件哈希不同的恢复；GIF 动画必须保持帧和时序。最后调用 `finish`、`verify-live --apply` 完成后处理与最新状态回写，原始回执不变。新入口的既有商品安全跳过已实测通过，尚需以全新 URL 清单验证连续采集。
+**批量清单**：UTF-8 文本文件，每行一条完整原始天猫商品 URL；也接受 JSON 字符串数组。批量队列顺序处理、逐商品保存回执；已有完整同 SKU 商品先独立复核；不完整回执不重采，显式 V3 队列只在证据充分时执行一次受控恢复；新商品若发生共享服务故障、不确定写入或验收失败，批次熔断并保留后续未开始记录。对少量确认与全库素材完全相同的缺图，可先执行受控 `recover-direct`，再显式使用 `recover-duplicates` 进行内容一致而文件哈希不同的恢复；GIF 动画必须保持帧和时序。最后调用 `finish`、`verify-live --apply` 完成后处理与最新状态回写，原始回执不变。新 V3 入口的既有商品安全跳过及全新 URL 连续采集均已通过 PC2 实测；V2 默认入口保持不变。
 
 **Eagle 是唯一常规图片下载/归档工具。** `stitch-eagle` 默认不复制一整套本地原始图片；以当前 Eagle 真实文件及 SHA-256 为准，返回已存在结果时不会再提交。历史补图的现状使用 `archive --check` 读取当前 Eagle，不重写初次 receipt。 只允许对 Eagle 已提交但确认少量缺失的商品，通过独立恢复命令补图，同一商品任务累计 **最多 10 张**。不得在状态不确定时重复提交 `item_add`。不修改原图，保留 GIF 动画；新商品图片完整后自动拼接长图；Eagle 缺图或任一提交结果不确定时保留失败状态，不把缺图拼接成假完整。
 
