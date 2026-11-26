@@ -36,6 +36,8 @@ V3 只在 Node.js 24+ 使用内置 SQLite，不能因此抬高 V2 Node 最低版
 
 ## 自动行业分类与 Eagle 展示
 
+- 遇到待分类、用户指定分类、新产品类型或类目调整，先读 [docs/INDUSTRY-CLASSIFICATION.md](docs/INDUSTRY-CLASSIFICATION.md)，以 `scripts/industry-core.mjs` 为唯一可执行类目和关键词定义；不依据历史 HANDOFF 或临时自造标签扩展行业。优先使用已有行业，新增类目需用户授权并同步规则、回归测试与指南。只对当前获授权的商品 ID 调整，明确授权前不覆盖人工锁定，不批量迁移无关商品。分类修正不得触发重采。
+
 - 分类使用商品 ID 而非共享 Eagle 图片 ID；商品登记 data/captures.json 是唯一事实来源，不修改历史 receipt 或淘宝 URL。人工更正 manualLocked 必须保留。
 - 采集完成及 verify-live --apply 完成时按商品标题自动分类并在已验收的首张 750px 长图上增量设置专用行业标签；失败返回 industrySync 独立结果，不改变采集成功状态。
 - PC2 已将 29 个历史商品完整迁移为 `电商平台批量采集/<行业>/<商品ID>/主图|详情页`，采用 Eagle 官方 `folder_update(parentId)`，保留商品 ID、主图/详情目录 ID 和物理原图；未知行业进「待分类」。`eagle-folder-layout.mjs` 负责新旧结构统一解析，任何重复商品 ID 必须拒绝新建。

@@ -13,6 +13,18 @@ const samples=[
  ['图拉斯大眼仔屏显充电器 AVS 60W Type-C数据线一套','electronics','charger'],
  ['蕉调胸贴女防走光隐形硅胶乳贴','apparel','chestpad'],
  ['蕉调灰色打底裤女秋冬显瘦连裤袜','apparel','leggings'],
+ ['扫振电动牙刷齿缝刷原装替换头清洁软毛成人刷头','personalcare','oral'],
+ ['扫振电动牙刷学生成人女生情侣全自动智能','personalcare','oral'],
+ ['牙刷替换刷头原装','personalcare','oral'],
+ ['家用便携冲牙器','personalcare','oral'],
+ ['高速吹风机SE 2家用负离子护发速干大风力电吹风筒','personalcare','hair'],
+ ['负离子风筒','personalcare','hair'],
+ ['风筒','personalcare','hair'],
+ ['家用直发器卷发棒','personalcare','hair'],
+ ['便携电动剃须刀','personalcare','grooming'],
+ ['家用脱毛仪','personalcare','beautydevice'],
+ ['r9u型枕旅行便携记忆棉颈枕睡觉坐车飞机专用护颈脖子u形枕','home','pillow'],
+ ['r11Ｕ型枕旅行便携记忆棉旅行枕飞机睡觉颈枕u形枕','home','pillow'],
 ];
 for(const [title,industry,sub] of samples)
  test('Industry classifies product nouns '+industry+'/'+sub+': '+title.slice(0,12),()=>{
@@ -74,4 +86,21 @@ test('Manual industry classification cannot be overridden by a future capture up
     assert.equal(product.classification.manualLocked,true);
     assert.equal(product.status,'success');
   }finally{rmSync(root,{force:true,recursive:true})}
+});
+
+test('Generic accessories and unrelated product words do not force personal care or pillow classification',()=>{
+  for(const title of ['清洁刷头替换装','花园修剪器','工业风筒通风管','工业吹风机','枕套床单','U型枕套','成人生日礼物']){
+    assert.equal(classifyProductTitle(title).status,'needs_review',title);
+  }
+});
+test('Mixed personal-care categories and cross-industry nouns remain unresolved',()=>{
+  assert.equal(classifyProductTitle('电动牙刷吹风机组合').reason,'ambiguous_product_nouns');
+  assert.equal(classifyProductTitle('充电宝电动牙刷组合').reason,'cross_industry_conflict');
+});
+test('New category codes and labels are stable and accept manual classification',()=>{
+  assert.equal(INDUSTRIES.personalcare.label,'个护电器');
+  assert.equal(subcategoryTag('personalcare','oral'),'采集子类｜个护电器／口腔护理');
+  assert.equal(subcategoryTag('personalcare','hair'),'采集子类｜个护电器／美发电器');
+  assert.equal(subcategoryTag('home','pillow'),'采集子类｜家居日用／枕类寝具');
+  assert.ok(isConfidentClassification(classifyManual('home','pillow')));
 });

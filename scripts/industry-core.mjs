@@ -1,12 +1,13 @@
 // Deterministic product-level industry taxonomy. No Eagle calls and no LLM dependency.
 // Industry identity belongs to a product, NEVER to the globally shared image itemId.
-export const INDUSTRY_RULE_VERSION='industry-2026-11-v1';
+export const INDUSTRY_RULE_VERSION='industry-2026-11-v2';
 export const INDUSTRIES=Object.freeze({
   adult:{label:'成人用品',subcategories:{female:'女用器具',male:'男用器具',accessory:'情趣道具',care:'润滑护理',other:'其它'}},
   electronics:{label:'3C数码',subcategories:{powerbank:'充电宝',charger:'充电器',cable:'数据线',accessory:'数码配件',other:'其它'}},
   apparel:{label:'服饰内衣',subcategories:{chestpad:'胸贴',leggings:'打底裤',underwear:'女士内衣',clothing:'服装',other:'其它'}},
   beauty:{label:'美妆护肤',subcategories:{other:'其它'}},
-  home:{label:'家居日用',subcategories:{other:'其它'}},
+  personalcare:{label:'个护电器',subcategories:{oral:'口腔护理',hair:'美发电器',grooming:'剃须理容',beautydevice:'美容仪器',other:'其它'}},
+  home:{label:'家居日用',subcategories:{pillow:'枕类寝具',other:'其它'}},
   food:{label:'食品生鲜',subcategories:{other:'其它'}},
   pets:{label:'宠物用品',subcategories:{other:'其它'}},
   other:{label:'其它行业',subcategories:{other:'其它'}}
@@ -19,9 +20,15 @@ const EXACT=[
   ['electronics','cable',/(?:数据线|充电线|Type-C线|typec线)/gi],
   ['apparel','chestpad',/(?:胸贴|乳贴|防走光贴|隐形胸贴)/gi],
   ['apparel','leggings',/(?:打底裤|连裤袜|裤袜)/gi],
-  ['apparel','underwear',/(?:文胸|内衣|胸罩)/gi]
+  ['apparel','underwear',/(?:文胸|内衣|胸罩)/gi],
+  // Generic brush heads and trimmers are not enough to infer personal care.
+  ['personalcare','oral',/(?:电动牙刷|冲牙器|水牙线|牙刷(?:专用|原装)?(?:替换)?刷头|牙刷(?:原装)?替换头)/gi],
+  ['personalcare','hair',/(?:电吹风筒?|(?<!工业)吹风机|(?:美发|护发|负离子|高速|家用)风筒|卷发棒|直发器|^风筒$)/gi],
+  ['personalcare','grooming',/(?:电动剃须刀|剃须刀|理发器|电推剪|鼻毛修剪器)/gi],
+  ['personalcare','beautydevice',/(?:洁面仪|美容仪|脱毛仪)/gi],
+  ['home','pillow',/(?:u\s*(?:型|形)枕|旅行枕|颈枕|记忆棉枕)(?!套|罩)/gi]
 ];
-const PRIORITY={female:3,accessory:1,powerbank:3,charger:2,cable:1,chestpad:3,leggings:3,underwear:2};
+const PRIORITY={female:3,accessory:1,powerbank:3,charger:2,cable:1,chestpad:3,leggings:3,underwear:2,oral:3,hair:3,grooming:3,beautydevice:3,pillow:3};
 // Every matching token must be an actual product noun, not a loose AV/3C/mini token.
 export function classifyProductTitle(title) {
   if(typeof title!=='string'||title.trim().length<2)

@@ -53,7 +53,7 @@ node scripts/ecom.mjs industry-folders --rollback <商品ID>         # 只读核
 # 显式回退：industry-folders --rollback <商品ID> --apply（仅在需要恢复且核验通过时执行）
 ```
 
-一级行业编码：adult（成人用品）、electronics（3C数码）、apparel（服饰内衣）、beauty、home、food、pets、other。二级类目在 scripts/industry-core.mjs 管理。关键词证据不足则标记 needs_review，第一版不自动调用 LLM。人工更正设置 manualLocked，后续自动流程不可覆盖。
+一级行业与二级类目由 `scripts/industry-core.mjs` 统一定义。新增 personalcare（个护电器）及 home/pillow（枕类寝具）；原有行业编码保持不变。Agent 分类决策、完整类目表、关键词边界、规则维护和单商品迁移步骤见 [行业分类与 Agent 执行指南](docs/INDUSTRY-CLASSIFICATION.md)。关键词证据不足则标记 needs_review，不自动调用 LLM。人工更正设置 manualLocked，后续自动流程不可覆盖。
 
 PC2 历史 29 个商品已整体迁移到行业实体目录：成人用品 19、3C数码 8、服饰内衣 2。迁移前的 Eagle 目录 ID/商品图片关联与移动后的读回结果分别保存在 `data/migrations/industry/`。其中 11 个已完成商品的长图在迁移后重新验证为完整；其余 18 个维持原采集完成状态，不冒充完整商品。`industry --apply` 只维护商品级分类记录，目录层级请用 `industry-folders`；手动修改分类 `industry --set` 会同时移动整个 Eagle 商品文件夹。
 

@@ -37,6 +37,7 @@
 !/docs/
 /docs/*
 !/docs/PIPELINE-RULES.md
+!/docs/INDUSTRY-CLASSIFICATION.md
 !/docs/RECOVERY.md
 !/docs/INSTALL-WINDOWS.md
 !/docs/MCP-DEPENDENCIES.md

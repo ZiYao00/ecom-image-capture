@@ -54,6 +54,8 @@ node scripts/ecom.mjs capture "<完整天猫URL>" "D:\素材"     # 用户指定
 
 ## 商品级行业分类独立阶段
 
+- 分类任务先读 [INDUSTRY-CLASSIFICATION.md](INDUSTRY-CLASSIFICATION.md)；分类代码、规则版本、冲突处理、白名单发布及小范围迁移验收按该指南。已有 `manualLocked` 不因新增自动规则而覆盖；仅在用户明确授权更正具体商品时使用人工更正。新增类目不触发历史全量重算或无关商品目录迁移。
+
 - 商品唯一分类来源为 data/captures.json.products[商品ID].classification，包含行业/子类编码、规则版本、证据、来源和人工锁定。原始 receipt 与历史淘宝 URL 不改写。分类不等于采集完整性。
 - 商品标题按确切产品名词分类，AV、3C、mini 等泛词不作为行业依据；冲突或未知则 needs_review。人工锁定分类高于自动规则；本版无需 LLM API。
 - ecom industry --check 只读预览；--apply 只修改业务分类；--list 查询；--set 手工改类并锁定；--sync-eagle 联动。原有 capture 与 verify-live --apply 只在完整商品验收后尝试自动联动，联动失败不影响采集状态。
